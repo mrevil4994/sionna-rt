@@ -4,6 +4,4 @@
 #
 """Sionna Library with Sionna RT"""
 
-__version__ = "1.0.0"
-
 from . import rt

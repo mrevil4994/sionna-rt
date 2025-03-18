@@ -6,13 +6,16 @@
 
 # pylint: disable=wrong-import-position
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import importlib
 
 import mitsuba as mi
 if mi.variant() is None:
-    mi.set_variant("cuda_ad_mono_polarized", "llvm_ad_mono_polarized")
+    try:
+        mi.set_variant("cuda_ad_mono_polarized", "llvm_ad_mono_polarized")
+    except ImportError:
+        mi.set_variant("llvm_ad_mono_polarized")
 
 from .utils import *
 from .antenna_pattern import AntennaPattern, \
