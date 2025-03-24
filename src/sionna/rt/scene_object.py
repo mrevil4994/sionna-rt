@@ -97,9 +97,9 @@ class SceneObject:
         self.radio_material.add_object()
 
         # Set initial position and orientation of the object
-        self._position = mi.Point3f(0,0,0)
-        self._orientation = mi.Point3f(0,0,0)
-        self._scaling = mi.Float(1.)
+        self._position = mi.Point3f(0, 0, 0)
+        self._orientation = mi.Point3f(0, 0, 0)
+        self._scaling = mi.Vector3f(1.0)
 
     @property
     def scene(self):
@@ -300,16 +300,25 @@ class SceneObject:
 
     @property
     def scaling(self):
-        r"""Get/set the scaling
+        r"""Get the scaling in the coordinate system of the object.
 
-        :type: :py:class:`mi.Float`
+        :type: :py:class:`mi.Vector3f`
         """
         return self._scaling
 
     @scaling.setter
-    def scaling(self, new_scaling: mi.Float):
+    def scaling(self, new_scaling: mi.Float | mi.Vector3f):
+        r"""Set the scaling value in the coordinate system of the object. If a
+        scalar value is passed in, each dimension is scaled equally by
+        new_scaling. Otherwise, the object is scaled by the x, y and z values
+        of new_scaling in the coordinate system of the object. 
 
-        if new_scaling <= 0.:
+        :param new_scaling: The new scaling factor in the objects coordinate
+            system. Can be a scalar or a vector value
+        """
+        new_scaling = mi.Vector3f(new_scaling)
+
+        if dr.any(new_scaling <= 0.0):
             raise ValueError("Scaling must be positive")
 
         # Scene parameters
@@ -319,10 +328,20 @@ class SceneObject:
         # scene
         vp_key = self._mi_shape.id() + ".vertex_positions"
 
+        # Get the current rotation and it's inverse
+        cur_rotation = rotation_matrix(self.orientation)
+        inv_cur_rotation = cur_rotation.T
+
         current_vertices = dr.unravel(mi.Point3f, scene_params[vp_key])
-        current_vertices -= self.position
-        scaled_vertices = new_scaling*current_vertices/self._scaling
-        scaled_vertices += self.position
+
+        current_vertices -= self.position  # Undo the translation
+        rotated_vertices = inv_cur_rotation @ current_vertices  # Undo the rotation
+
+        scaled_vertices = (new_scaling / self._scaling) * rotated_vertices  # Perform the scaling
+
+        scaled_vertices = cur_rotation @ scaled_vertices  # Redo the rotation
+        scaled_vertices += self.position  # Redo the translation
+
         scene_params[vp_key] = dr.ravel(scaled_vertices)
 
         self._scaling = new_scaling
