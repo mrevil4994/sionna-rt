@@ -100,9 +100,6 @@ class Paths:
             self._eff_tx_array_size = self._tx_array.array_size
             self._eff_rx_array_size = self._rx_array.array_size
 
-        self._num_src = self._num_tx*self._eff_tx_array_size
-        self._num_tgt = self._num_rx*self._eff_rx_array_size
-
         src_ind = paths_buffer.source_indices
         tgt_ind = paths_buffer.target_indices
 
@@ -114,11 +111,25 @@ class Paths:
         self._tx_ant_ind = src_ind % self._eff_tx_array_size
         self._rx_ant_ind = tgt_ind % self._eff_rx_array_size
 
+        # The following uses `dr.scatter_inc` to jointly:
+        # - Compute the maximum number of paths over all (source, target)
+        # couples, which is then used to allocate the memory for the tensors.
+        # - Compute a path index such that paths sharing the same
+        # (source, target) couple do not share the same index. This is later
+        # used to scatter data in the allocated tensors.
+        #
         # We must ensure that the path index used for scattering the path data
         # in the allocated tensors are unique for every (source, target) couple.
         # Map (src_ind, tgt_ind) to a unique integer identifying the path source
         # and target
-        self._src_tgt_id = tgt_ind*self._num_src + src_ind
+        num_src = self._num_tx*self._eff_tx_array_size
+        num_tgt = self._num_rx*self._eff_rx_array_size
+        src_tgt_id = tgt_ind*num_src + src_ind
+        #
+        num_paths = dr.zeros(mi.UInt, num_src*num_tgt)
+        self._path_ind = dr.scatter_inc(num_paths, src_tgt_id)
+        dr.eval(self._path_ind)
+        self._max_num_paths = dr.max(num_paths)[0]
 
         # Build the tensors
 
@@ -781,33 +792,21 @@ class Paths:
         paths_buffer = self._paths_buffer
         num_tx = self._num_tx
         num_rx = self._num_rx
-        num_src = self._num_src
-        num_tgt = self._num_tgt
         tx_array_size = self._eff_tx_array_size
         rx_array_size = self._eff_rx_array_size
         tx_ind = self._tx_ind
         rx_ind = self._rx_ind
         tx_ant_ind = self._tx_ant_ind
         rx_ant_ind = self._rx_ant_ind
-        src_tgt_id = self._src_tgt_id
         num_rx_patterns = len(self._rx_array.antenna_pattern.patterns)
         num_tx_patterns = len(self._tx_array.antenna_pattern.patterns)
-
-        # The following uses `dr.scatter_inc` to jointly:
-        # - Compute the maximum number of paths over all (source, target)
-        # couples, which is then used to allocate the memory for the tensors.
-        # - Compute a path index such that paths sharing the same
-        # (source, target) couple do not share the same index. This is later
-        # used to scatter data in the allocated tensors.
-        num_paths = dr.zeros(mi.UInt, num_src*num_tgt)
-        path_ind = dr.scatter_inc(num_paths, src_tgt_id)
-        # Required to ensure `path_ind` is available after the max op (reduces)
-        dr.eval(path_ind)
-        # Maximum number of paths
-        max_num_paths = dr.max(num_paths)[0]
+        # Path index such that paths sharing the same (source, target) couple
+        # do not share the same index.
+        path_ind = self._path_ind
+        # Maximum number of paths over all (source, target) couples
+        max_num_paths = self._max_num_paths
 
         # Allocate the tensors and fill them
-
         # `a`
         a_real = dr.zeros(mi.TensorXf, [num_rx, num_rx_patterns, rx_array_size,
                                         num_tx, num_tx_patterns, tx_array_size,
@@ -1106,30 +1105,19 @@ class Paths:
         total_paths_count = paths_buffer.buffer_size
         num_tx = self._num_tx
         num_rx = self._num_rx
-        num_src = self._num_src
-        num_tgt = self._num_tgt
         tx_array_size = self._eff_tx_array_size
         rx_array_size = self._eff_rx_array_size
         tx_ind = self._tx_ind
         rx_ind = self._rx_ind
         tx_ant_ind = self._tx_ant_ind
         rx_ant_ind = self._rx_ant_ind
-        src_tgt_id = self._src_tgt_id
         num_rx_patterns = len(self._rx_array.antenna_pattern.patterns)
         num_tx_patterns = len(self._tx_array.antenna_pattern.patterns)
-
-        # The following uses `dr.scatter_inc` to jointly:
-        # - Compute the maximum number of paths over all (source, target)
-        # couples, which is then used to allocate the memory for the tensors.
-        # - Compute a path index such that paths sharing the same
-        # (source, target) couple do not share the same index. This is later
-        # used to scatter data in the allocated tensors.
-        num_paths = dr.zeros(mi.UInt, num_src*num_tgt)
-        path_ind = dr.scatter_inc(num_paths, src_tgt_id)
-        # Required to ensure `path_ind` is available after the max op (reduces)
-        dr.eval(path_ind)
-        # Maximum number of paths
-        max_num_paths = dr.max(num_paths)[0]
+        # Path index such that paths sharing the same (source, target) couple
+        # do not share the same index.
+        path_ind = self._path_ind
+        # Maximum number of paths over all (source, target) couples
+        max_num_paths = self._max_num_paths
 
         # Shape of the tensors
         if self._synthetic_array:

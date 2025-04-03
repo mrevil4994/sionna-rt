@@ -325,6 +325,7 @@ class ImageMethod:
 
         active = dr.copy(valid_candidate)
         depth = dr.full(mi.UInt, max_depth, paths.buffer_size)
+        was_none = dr.full(mi.Bool, True, paths.buffer_size)
         vertex = dr.copy(paths_targets)
         normal = dr.zeros(mi.Normal3f, paths.buffer_size)
         while dr.hint(active, mode=self.loop_mode):
@@ -376,7 +377,7 @@ class ImageMethod:
             # If the intersection if valid, then stores the intersection point
             # as the path vertex, and update the direction of arrival
             paths.set_vertex(depth, si_scene.p, valid_inter)
-            paths.set_angles_rx(ray.d, valid_inter & (depth == max_depth))
+            paths.set_angles_rx(ray.d, valid_inter & was_none)
             # If the intersection is not valid, discard the candidate
             # If there was no intersection (none == True), then we did not
             # enter yet the specular suffix
@@ -386,13 +387,13 @@ class ImageMethod:
             active &= (depth  >= sf_start_depth) & valid_candidate
             vertex = dr.select(valid_inter, si_scene.p, vertex)
             normal = dr.select(valid_inter, si_scene.n, normal)
+            was_none = dr.copy(none)
 
         # Test visibility from the last vertex to the source of the specular
         # suffix
         ray = spawn_ray_to(vertex, sf_source, normal)
-        valid_candidate &= ~mi_scene.ray_test(ray,
-                                                        active=valid_candidate)
-        # If the candidate is valid, then update the direction of depatrue
+        valid_candidate &= ~mi_scene.ray_test(ray, active=valid_candidate)
+        # If the candidate is valid, then update the direction of depature
         paths.set_angles_tx(-ray.d, valid_candidate)
 
         return valid_candidate

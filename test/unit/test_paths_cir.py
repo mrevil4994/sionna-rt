@@ -8,7 +8,7 @@ import numpy as np
 
 import sionna.rt
 from sionna.rt import load_scene, Transmitter, Receiver, \
-                      PlanarArray, PathSolver
+                      PlanarArray, PathSolver, r_hat
 
 @pytest.mark.parametrize('synthetic_array', [True, False])
 def test_cir_computation(synthetic_array):
@@ -106,7 +106,7 @@ def test_cir_doppler_vs_geometry_updates():
     scene.add(Receiver("rx", [10,0,10]));
     scene.tx_array = PlanarArray(num_cols=1, num_rows=1,
                                 pattern="iso", polarization="V")
-    scene.rx_array = scene.tx_array 
+    scene.rx_array = scene.tx_array
     v_tx = np.array([3., 0., -3.])
     v_rx = np.array([-3., 0., -3.])
     v_ref =  np.array([0., 0., 3.])
@@ -187,3 +187,70 @@ def test_cir_reverse_direction(synthetic_array):
 
     assert np.allclose(a_ref, a_r)
     assert np.allclose(tau_ref, tau_r)
+
+def test_aoa_aod():
+
+    scene = load_scene(sionna.rt.scene.box)
+
+    scene.tx_array = PlanarArray(
+        num_rows=1,
+        num_cols=1,
+        vertical_spacing=0.5,
+        horizontal_spacing=0.5,
+        pattern="iso",
+        polarization="V",
+    )
+    scene.rx_array = PlanarArray(
+        num_rows=1,
+        num_cols=1,
+        vertical_spacing=0.5,
+        horizontal_spacing=0.5,
+        pattern="iso",
+        polarization="V",
+    )
+
+    tx_position = [0, 0, 1.0]
+    rx_position = [0, 0, 1.0]
+
+
+    tx = Transmitter(name="tx", position=tx_position)
+    rx = Receiver(name="rx", position=rx_position)
+
+    scene.add(tx)
+    scene.add(rx)
+
+    p_solver = PathSolver()
+
+    MAX_DEPTH = [1, 2]
+
+    for max_depth in MAX_DEPTH:
+        paths = p_solver(
+            scene=scene,
+            max_depth=max_depth,
+            los=False,
+            specular_reflection=True,
+            diffuse_reflection=False,
+            refraction=False,
+            synthetic_array=True,
+            seed=1,
+        )
+
+        # If paths have an even number of bounces, then the direction of arrival
+        # should be opposite to the direction of departure
+        int_types = paths.interactions.numpy()[:,0,0,:]
+        int_types = int_types > 0
+        depth = np.sum(int_types, axis=0)
+        flip_direction = (-1)**(depth+1)
+        flip_direction = np.expand_dims(flip_direction, axis=1)
+
+        theta_r = paths.theta_r.array
+        phi_r = paths.phi_r.array
+        theta_t = paths.theta_t.array
+        phi_t = paths.phi_t.array
+
+        k_tx = r_hat(theta_t, phi_t).numpy().T
+        k_rx = r_hat(theta_r, phi_r).numpy().T
+
+        d = np.linalg.norm(k_tx - k_rx*flip_direction, axis=1)
+        max_d = np.max(np.abs(d))
+        assert max_d < 1e-5
