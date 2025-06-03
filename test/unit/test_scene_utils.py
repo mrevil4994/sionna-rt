@@ -10,6 +10,7 @@ import tempfile
 import pytest
 
 import mitsuba as mi
+import drjit as dr
 from sionna import rt
 from sionna.rt import load_scene, SceneObject, HolderMaterial,  RadioMaterial,\
     ITURadioMaterial
@@ -144,3 +145,103 @@ def test03_scene_add_remove():
         scene.edit(add=new_car)
 
     os.remove(tmp_path)
+
+def test04_scene_object_scaling():
+    tmp_path = join(tempfile.gettempdir(), "test_scene.xml")
+
+    with open(tmp_path, "w") as f:
+        f.write("""
+        <scene version="2.1.0">
+
+            <emitter type="constant"/>
+
+            <integrator type="path"/>
+
+            <bsdf type="diffuse" id="bsdf1"/>
+
+            <shape type="cube" id="shape1">
+                <ref name="bsdf" id="bsdf1"/>
+            </shape>
+
+        </scene>""")
+
+    scene = load_scene(tmp_path, merge_shapes=False)
+    cube = scene.objects["shape1"]
+
+    # Helper functions
+    def assert_bbox_is(min_should_be, max_should_be):
+        shape_bb = cube._mi_shape.bbox()
+        assert dr.allclose(shape_bb.min, min_should_be, atol=1e-5)
+        assert dr.allclose(shape_bb.max, max_should_be, atol=1e-5)
+
+    def reset_position():
+        cube.position = mi.Point3f(0.0, 0.0, 0.0)  # Center the cube
+        cube.look_at(mi.Point3f(1.0, 0.0, 0.0))  # Look in the positive x direction
+
+    reset_position()
+
+    # Sanity check the box bounds before scaling
+    assert_bbox_is([-1, -1, -1], [1, 1, 1])
+    assert dr.all(cube.scaling == mi.Vector3f(1.0))
+
+    # Scale by a scalar value
+    scalar = 10
+    cube.scaling = scalar
+    assert_bbox_is([-scalar] * 3, [scalar] * 3)
+    assert dr.all(cube.scaling == mi.Vector3f(scalar))
+
+    # Reassign scalar value
+    scalar = 5
+    cube.scaling = scalar
+    assert_bbox_is([-scalar] * 3, [scalar] * 3)
+    assert dr.all(cube.scaling == mi.Vector3f(scalar))
+
+    # Negative scaling fails
+    with pytest.raises(ValueError, match=r"Scaling must be positive"):
+        cube.scaling = -1
+
+    # Scale by a vector
+    new_scale = mi.Vector3f(2.0, 4.0, 6.0)
+    cube.scaling = new_scale
+    assert_bbox_is([-new_scale.x, -new_scale.y, -new_scale.z], [new_scale.x, new_scale.y, new_scale.z])
+    assert dr.all(cube.scaling == new_scale)
+
+    # Reassign vector value
+    new_scale = mi.Vector3f(1.2, 2.3, 3.4)
+    cube.scaling = new_scale
+    assert_bbox_is([-new_scale.x, -new_scale.y, -new_scale.z], [new_scale.x, new_scale.y, new_scale.z])
+    assert dr.all(cube.scaling == new_scale)
+
+    # Negative scaling fails
+    with pytest.raises(ValueError, match=r"Scaling must be positive"):
+        cube.scaling = mi.Vector3f(-1.0, 1.0, 1.0)
+
+    # Translated and rotated cube scales correctly
+    reset_position()
+    cube.position = mi.Point3f(3.0, 6.0, 9.0) # Translate somewhere
+    cube.look_at(mi.Point3f(-1.0, -1.0, -1.0)) # Rotate it 
+
+    new_scale = mi.Vector3f(10.0, 5.0, 15.0) # Scale
+    cube.scaling = new_scale
+
+    reset_position() # After resetting position the bbox should be as below
+    assert_bbox_is([-new_scale.x, -new_scale.y, -new_scale.z], [new_scale.x, new_scale.y, new_scale.z])
+
+    # Translation and rotation is unaffected by scaling
+    reset_position()
+    cube.scaling = mi.Vector3f(1.0) # Reset scaling
+    cube.position = mi.Point3f(2.0, 4.0, 6.0) # Translate somewhere
+    cube.look_at(mi.Point3f(1.0, 1.0, 1.0)) # Rotate it 
+
+    scene_params = cube._scene.mi_scene_params
+    vp_key = cube._mi_shape.id() + ".vertex_positions"
+    vertices_before_scaling = dr.unravel(mi.Point3f, scene_params[vp_key])
+
+    cube.scaling = mi.Vector3f(1.23, 1.5, 7.0) # Scale it by some amount
+    cube.scaling = mi.Vector3f(1.0) # Reset the scale
+
+    # If translation and rotation unaffected then all vertices should be the same
+    scene_params = cube._scene.mi_scene_params
+    vp_key = cube._mi_shape.id() + ".vertex_positions"
+    vertices_after_scaling = dr.unravel(mi.Point3f, scene_params[vp_key])
+    assert dr.allclose(vertices_before_scaling, vertices_after_scaling, atol=1e-5)
