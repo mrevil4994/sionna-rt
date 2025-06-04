@@ -61,9 +61,8 @@ class RadioMaterialBase(mi.BSDF):
         if not isinstance(scene, scene_module.Scene):
             raise ValueError("`scene` must be an instance of Scene")
         if (self._scene is not None) and (self._scene is not scene):
-            msg = f"Radio material ('{self.name}') already used by another "\
-                "scene"
-            raise ValueError(msg)
+            raise ValueError(f"Radio material ('{self.name}') already used by"
+                             " another scene.")
         self._scene = scene
 
     @property
@@ -95,8 +94,7 @@ class RadioMaterialBase(mi.BSDF):
     def color(self, new_color: Tuple[float, float, float]):
         if len(new_color) == 3:
             if min(new_color) < 0. or max(new_color) > 1.:
-                msg = "Color components must be in the range (0,1)"
-                raise ValueError(msg)
+                raise ValueError("Color components must be in the range (0,1)")
         self._color = (new_color[0], new_color[1], new_color[2])
 
     @property
@@ -146,7 +144,7 @@ class RadioMaterialBase(mi.BSDF):
 
         - ``ctx.component`` is a binary mask that specifies the types of interaction enabled. Booleans can be obtained from this mask as follows:
 
-        .. code-block:: Python
+        .. code-block:: python
 
             specular_reflection_enabled = (ctx.component & InteractionType.SPECULAR) > 0
             diffuse_reflection_enabled = (ctx.component & InteractionType.DIFFUSE) > 0

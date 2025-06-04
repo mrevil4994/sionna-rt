@@ -42,8 +42,7 @@ class HolderMaterial(mi.BSDF):
                 raise ValueError("HolderMaterial only allows one nested radio"
                                  f" material but found property \"{k}\" of type"
                                  f" {type(v)}.")
-        if radio_material:
-            self.radio_material = radio_material
+        self.radio_material = radio_material
 
         # Set the velocity vector
         self._velocity = mi.Vector3f(0, 0, 0)
@@ -59,6 +58,9 @@ class HolderMaterial(mi.BSDF):
 
     @radio_material.setter
     def radio_material(self, radio_material):
+        if radio_material is None:
+            self._radio_material = None
+            return
         if not isinstance(radio_material, RadioMaterialBase):
             raise ValueError("The radio material should be an instance of"
                              " RadioMaterialBase")
@@ -84,31 +86,52 @@ class HolderMaterial(mi.BSDF):
 
     # --- Forward all other methods to the underlying radio material
     def sample(self, *args, **kwargs):
-        return self.radio_material.sample(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.sample(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval(self, *args, **kwargs):
-        return self.radio_material.eval(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def pdf(self, *args, **kwargs):
-        return self.radio_material.pdf(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.pdf(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_pdf(self, *args, **kwargs):
-        return self.radio_material.eval_pdf(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval_pdf(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_diffuse_reflectance(self, *args, **kwargs):
-        return self.radio_material.eval_diffuse_reflectance(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval_diffuse_reflectance(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_null_transmission(self, *args, **kwargs):
-        return self.radio_material.eval_null_transmission(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval_null_transmission(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def has_attribute(self, *args, **kwargs):
-        return self.radio_material.has_attribute(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.has_attribute(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_attribute(self, *args, **kwargs):
-        return self.radio_material.eval_attribute(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval_attribute(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_attribute_1(self, *args, **kwargs):
-        return self.radio_material.eval_attribute_1(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.eval_attribute_1(*args, **kwargs)
+        raise ValueError("No radio material attached to this holder")
     def eval_attribute_3(self, name, si, active=True):
         if name == "velocity":
             return self._velocity
-        return self.radio_material.eval_attribute_3(name, si, active)
+        if self.radio_material is not None:
+            return self.radio_material.eval_attribute_3(name, si, active)
+        raise ValueError("No radio material attached to this holder")
     def traverse(self, *args, **kwargs):
-        return self.radio_material.traverse(*args, **kwargs)
+        if self.radio_material is not None:
+            return self.radio_material.traverse(*args, **kwargs)
     def parameters_changed(self, *args, **kwargs):
-        return self.radio_material.parameters_changed(*args, **kwargs)
-
+        if self.radio_material is not None:
+            return self.radio_material.parameters_changed(*args, **kwargs)
 
 mi.register_bsdf("holder-material", lambda props: HolderMaterial(props=props))

@@ -20,8 +20,8 @@ class SampleData:
     returned by the solver, the paths spawn during shooting and bouncing of rays
     are referred to as "samples".
 
-    Each sample can lead to the recoring in a :class:`~sionna.rt.PathsBuffer` of
-    one or more paths.
+    Each sample can lead to the recording in a :class:`~sionna.rt.PathsBuffer`
+    of one or more paths.
 
     :param num_sources: Number of sources
     :param samples_per_src: Number of samples spawn per source

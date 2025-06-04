@@ -60,7 +60,7 @@ class PathSolver:
 
     Example
     -------
-    .. code-block:: Python
+    .. code-block:: python
 
         import sionna
         from sionna.rt import load_scene, Transmitter, Receiver, PlanarArray, PathSolver

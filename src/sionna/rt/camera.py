@@ -53,8 +53,8 @@ class Camera:
 
         if look_at is not None:
             if orientation != (0., 0., 0.):
-                msg = "Cannot specify both ``orientation`` and ``look_at``"
-                raise ValueError(msg)
+                raise ValueError("Cannot specify both `orientation` and"
+                                 " `look_at`")
 
             # Set the position before the look_at so that the camera
             # really points to the target.

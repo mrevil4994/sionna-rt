@@ -17,6 +17,7 @@ from sionna.rt.constants import INTERACTION_TYPE_TO_COLOR,\
                                 InteractionType,\
                                 LOS_COLOR
 from sionna.rt.camera import Camera
+from sionna.rt.utils.meshes import clone_mesh
 
 
 def scene_scale(scene: rt.Scene):
@@ -257,7 +258,7 @@ def paths_to_segments(paths : rt.Paths):
 
 def unmultiply_alpha(arr: np.ndarray):
     """
-    De-multiply the alpha channel
+    Un-multiply the alpha channel.
 
     Input
     -----
@@ -267,7 +268,7 @@ def unmultiply_alpha(arr: np.ndarray):
     Output
     -------
     arr : [w,h,4]
-        Image with the alpha channel de-multiplied.
+        Image with the alpha channel de-modulated (divided out).
     """
     arr = arr.copy()
     alpha = arr[:, :, 3]
@@ -286,70 +287,121 @@ def twosided_diffuse(color: mi.Color3f | list[float]) -> mi.BSDF:
     })
 
 
-def radio_map_to_textured_rectangle(radio_map: rt.RadioMap, tx: int | None,
-                                    db_scale: bool = True,
-                                    vmin: float | None = None,
-                                    vmax: float | None = None,
-                                    rm_metric: str = "path_gain",
-                                    viewpoint: mi.Vector3f | None = None):
-    # Ensure it's a CPU-side value
-    to_world = mi.ScalarTransform4f(radio_map.to_world.matrix.numpy().squeeze())
+def radio_map_to_emissive_shape(radio_map: rt.RadioMap, tx: int | None,
+                                db_scale: bool = True,
+                                vmin: float | None = None,
+                                vmax: float | None = None,
+                                rm_metric: str = "path_gain",
+                                viewpoint: mi.Vector3f | None = None):
+    """
+    Given a pre-computed Radio Map, create a Mitsuba shape associated with a
+    color-mapped emitter in order to visualize it.
+    """
 
     # Resample values from cell centers to cell corners
-    rm_values = getattr(radio_map, rm_metric).numpy()
-    if tx is None:
-        rm_values = np.max(rm_values, axis=0)
-    else:
-        rm_values = rm_values[tx]
+    rm_values = radio_map.transmitter_radio_map(metric=rm_metric, tx=tx).numpy()
     # Ensure that dBm is correctly computed for RSS
     if rm_metric=="rss" and db_scale:
         rm_values *= 1000
-    radio_map = resample_to_corners(rm_values)
 
-    texture, opacity = radio_map_texture(
-        radio_map, db_scale=db_scale, vmin=vmin, vmax=vmax)
-    bsdf = {
-        'type': 'mask',
-        'opacity': {
-            'type': 'bitmap',
-            'bitmap': mi.Bitmap(opacity.astype(np.float32)),
-            "filter_type": "nearest"
-        },
-        'nested': {
-            'type': 'diffuse',
-            'reflectance': 0.,
-        },
-    }
+    if isinstance(radio_map, rt.PlanarRadioMap):
+        rm_values = resample_to_corners(rm_values)
 
-    emitter = {
-        'type': 'area',
-        'radiance': {
-            'type': 'bitmap',
-            'bitmap': mi.Bitmap(texture.astype(np.float32)),
-            "filter_type": "nearest"
-        },
-    }
+        texture, opacity = radio_map_texture(
+            rm_values, db_scale=db_scale, vmin=vmin, vmax=vmax)
+        bsdf = {
+            'type': 'mask',
+            'opacity': {
+                'type': 'bitmap',
+                'bitmap': mi.Bitmap(opacity.astype(np.float32)),
+                "filter_type": "nearest"
+            },
+            'nested': {
+                'type': 'diffuse',
+                'reflectance': 0.,
+            },
+        }
 
-    flip_normal = False
-    if viewpoint is not None:
-        viewpoint = mi.ScalarPoint3f(viewpoint.numpy().squeeze())
+        emitter = {
+            'type': 'area',
+            'radiance': {
+                'type': 'bitmap',
+                'bitmap': mi.Bitmap(texture.astype(np.float32)),
+                "filter_type": "nearest"
+            },
+        }
 
-        # Area emitters are single-sided, so we need to flip the rectangle's
-        # normals if the camera is on the wrong side.
-        p0 = to_world.transform_affine([-1, -1, 0])
-        p1 = to_world.transform_affine([-1, 0, 0])
-        p2 = to_world.transform_affine([0, -1, 0])
-        plane_center = to_world.transform_affine([0, 0, 0])
-        normal = dr.cross(p1 - p0, p2 - p0)
-        flip_normal = dr.dot(plane_center - viewpoint, normal) < 0
+        # Pose of the measurement plane (ensuring it's a CPU-side value)
+        matrix_numpy = radio_map.to_world.matrix.numpy().squeeze()
+        to_world = mi.ScalarTransform4f(matrix_numpy)
 
-    return {
-        'type': 'rectangle',
-        'flip_normals': flip_normal,
-        'to_world': to_world,
-        'bsdf': bsdf,
-        'emitter': emitter,
-    }
+        flip_normal = False
+        if viewpoint is not None:
+            viewpoint = mi.ScalarPoint3f(viewpoint.numpy().squeeze())
+
+            # Area emitters are single-sided, so we need to flip the rectangle's
+            # normals if the camera is on the wrong side.
+            p0 = to_world.transform_affine([-1, -1, 0])
+            p1 = to_world.transform_affine([-1, 0, 0])
+            p2 = to_world.transform_affine([0, -1, 0])
+            plane_center = to_world.transform_affine([0, 0, 0])
+            normal = dr.cross(p1 - p0, p2 - p0)
+            flip_normal = dr.dot(plane_center - viewpoint, normal) < 0
+
+        return {
+            'type': 'rectangle',
+            'flip_normals': flip_normal,
+            'to_world': to_world,
+            'bsdf': bsdf,
+            'emitter': emitter,
+        }
+
+    elif isinstance(radio_map, rt.MeshRadioMap):
+        # rm_values has per-triangle values for the requested tx and metric.
+        texture, opacity = radio_map_texture(
+            rm_values, db_scale=db_scale, vmin=vmin, vmax=vmax)
+
+        measurement_surface = radio_map.measurement_surface
+        # The measurement surface is not actually part of the scene, so we
+        # let it be transparent where there's no coverage, just like for
+        # planar radio maps.
+        bsdf = {
+            'type': 'mask',
+            'opacity': {
+                'type': 'mesh_attribute',
+                "name": "face_opacity",
+            },
+            'nested': {
+                'type': 'diffuse',
+                'reflectance': 0.,
+            },
+        }
+
+        emitter = {
+            # Special two-sided area emitter because we cannot really guess
+            # the orientation of the measurement surface.
+            'type': 'twosided_area',
+            'nested': {
+                'type': 'area',
+                'radiance': {
+                    'type': 'mesh_attribute',
+                    "name": "face_rm_values",
+                },
+            },
+        }
+
+        props = mi.Properties()
+        props['bsdf'] = mi.load_dict(bsdf)
+        props['emitter'] = mi.load_dict(emitter)
+        # TODO: this doesn't preserve e.g. the `flip_normals` property :(
+        cloned_shape = clone_mesh(measurement_surface, props=props)
+        cloned_shape.add_attribute("face_opacity", 1, opacity)
+        cloned_shape.add_attribute("face_rm_values", 3, texture.ravel())
+
+        return cloned_shape
+
+    else:
+        raise ValueError(f"Unsupported RadioMap type: {type(radio_map)}")
 
 
 def resample_to_corners(values: np.ndarray) -> np.ndarray:
@@ -368,21 +420,25 @@ def resample_to_corners(values: np.ndarray) -> np.ndarray:
     )
 
 
-def radio_map_texture(radio_map: np.ndarray, db_scale: bool = True,
-                      vmin: float | None = None, vmax: float | None = None):
+def radio_map_texture(
+    rm_values: np.ndarray, db_scale: bool = True,
+    vmin: float | None = None, vmax: float | None = None
+) -> tuple[np.ndarray, np.ndarray]:
     # Leave zero-valued regions as transparent
-    valid = radio_map > 0.
+    valid = rm_values > 0.
     opacity = valid.astype(np.float32)
 
     # Color mapping of real values
-    radio_map, normalizer, color_map = radio_map_color_mapping(
-        radio_map, db_scale=db_scale, vmin=vmin, vmax=vmax)
-    texture = color_map(normalizer(radio_map))[:, :, :3]
+    rm_values, normalizer, color_map = radio_map_color_mapping(
+        rm_values, db_scale=db_scale, vmin=vmin, vmax=vmax)
+    texture = color_map(normalizer(rm_values))
+    # Eliminate alpha channel
+    texture = texture[..., :3]
     # Colors from the color map are gamma-compressed, go back to linear
     texture = np.power(texture, 2.2)
 
     # Pre-multiply alpha to avoid fringe
-    texture *= opacity[:, :, None]
+    texture *= opacity[..., None]
 
     return texture, opacity
 
@@ -397,6 +453,7 @@ def radio_map_color_mapping(radio_map: np.ndarray,
     Also applies the dB scaling to a copy of the radio map, if requested.
     """
     valid = np.logical_and(radio_map > 0., np.isfinite(radio_map))
+    any_valid = np.any(valid)
     radio_map = radio_map.copy()
     if db_scale:
         radio_map[valid] = 10. * np.log10(radio_map[valid])
@@ -404,9 +461,9 @@ def radio_map_color_mapping(radio_map: np.ndarray,
         radio_map[valid] = radio_map[valid]
 
     if vmin is None:
-        vmin = radio_map[valid].min()
+        vmin = radio_map[valid].min() if any_valid else 0
     if vmax is None:
-        vmax = radio_map[valid].max()
+        vmax = radio_map[valid].max() if any_valid else 0
     normalizer = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     color_map = matplotlib.colormaps.get_cmap('viridis')
     return radio_map, normalizer, color_map

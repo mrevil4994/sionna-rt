@@ -4,10 +4,11 @@
 #
 """Utility module of Sionna RT"""
 
+from .complex import *
 from .electromagnetics import *
 from .geometry import *
 from .jones import *
 from .misc import *
 from .ray_tracing import *
 from .render import *
-from .complex import *
+from .meshes import *

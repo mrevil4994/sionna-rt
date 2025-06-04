@@ -11,27 +11,6 @@
 	<integrator type="path">
 		<integer name="max_depth" value="12"/>
 	</integrator>
-	<sensor type="perspective" id="Camera">
-		<string name="fov_axis" value="x"/>
-		<float name="fov" value="98.405015"/>
-		<float name="principal_point_offset_x" value="0.000000"/>
-		<float name="principal_point_offset_y" value="-0.000000"/>
-		<float name="near_clip" value="0.100000"/>
-		<float name="far_clip" value="1000.000000"/>
-		<transform name="to_world">
-			<rotate x="1" angle="120.35733151592261"/>
-			<rotate y="1" angle="2.266394464252033e-06"/>
-			<rotate z="1" angle="-167.6938619360476"/>
-			<translate value="1.287047 -5.899893 3.536810"/>
-		</transform>
-		<sampler type="independent">
-			<integer name="sample_count" value="$spp"/>
-		</sampler>
-		<film type="hdrfilm">
-			<integer name="width" value="$resx"/>
-			<integer name="height" value="$resy"/>
-		</film>
-	</sensor>
 
 <!-- Materials -->
 

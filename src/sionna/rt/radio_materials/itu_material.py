@@ -86,10 +86,10 @@ class ITURadioMaterial(RadioMaterial):
                 itu_type = props['type']
                 props.remove_property('type')
             else:
-                raise ValueError("Missing ITU material type")
+                raise ValueError(f"Missing ITU material type \"{itu_type}\"")
 
         if itu_type not in ITU_MATERIALS_PROPERTIES:
-            raise ValueError("Invalid ITU material type")
+            raise ValueError(f"Invalid ITU material type \"{itu_type}\"")
         self._itu_type = itu_type
 
         if color is None:

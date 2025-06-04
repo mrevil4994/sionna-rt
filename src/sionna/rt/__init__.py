@@ -6,7 +6,7 @@
 
 # pylint: disable=wrong-import-position
 
-__version__ = "1.0.2"
+__version__ = "1.1.0"
 
 import importlib
 
@@ -35,10 +35,11 @@ from .constants import InteractionType,\
                        INVALID_SHAPE,\
                        INVALID_PRIMITIVE
 from .path_solvers import PathSolver, Paths
-from .radio_map_solvers import RadioMapSolver, RadioMap
+from .radio_map_solvers import RadioMapSolver, PlanarRadioMap, MeshRadioMap, RadioMap
 from .preview import Previewer
 from .scene_object import SceneObject
 from .sliced_integrator import SlicedPathIntegrator, SlicedDepthIntegrator
+from .twosided_area import TwosidedAreaEmitter
 
 # Register the defined materials once a Mitsuba variant is set
 def sionna_rt_variant_cb(old: str, new: str):
@@ -55,5 +56,12 @@ def sionna_rt_variant_cb(old: str, new: str):
     global SlicedPathIntegrator, SlicedDepthIntegrator
     SlicedPathIntegrator = sliced_integrator.SlicedPathIntegrator
     SlicedDepthIntegrator = sliced_integrator.SlicedDepthIntegrator
+
+    # --- Twosided area emitter
+    # pylint: disable=import-outside-toplevel
+    from . import twosided_area
+    importlib.reload(twosided_area)
+    global TwosidedAreaEmitter
+    TwosidedAreaEmitter = twosided_area.TwosidedAreaEmitter
 
 mi.detail.add_variant_callback(sionna_rt_variant_cb)

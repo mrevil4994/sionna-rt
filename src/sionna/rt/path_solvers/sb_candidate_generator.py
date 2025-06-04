@@ -234,7 +234,7 @@ class SBCandidateGenerator:
         Updates the hash of a path ``path_hash`` with the interaction hash
         ``interaction_hash`` using polynomial hashing, i.e.,
 
-        .. code-block:: Python
+        .. code-block:: python
 
             hash[n] = hash[n-1]*p + i
 

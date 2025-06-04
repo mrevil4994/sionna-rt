@@ -354,7 +354,7 @@ class AntennaPattern(ABC):
 
         Example
         -------
-        .. code-block:: Python
+        .. code-block:: python
 
             from sionna.rt import PlanarArray
             array = PlanarArray(num_rows=1, num_cols=1, pattern="tr38901", polarization="V")

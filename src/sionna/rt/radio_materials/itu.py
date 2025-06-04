@@ -86,9 +86,8 @@ def itu_material(name, f):
             valid_freq = True
             break
     if not valid_freq:
-        msg = f"Properties of ITU material '{name}' are not defined for"\
-            " this frequency"
-        raise ValueError(msg)
+        raise ValueError(f"Properties of ITU material '{name}' are not defined"
+                         " for this frequency")
 
     # Evaluate the material properties
     eta_r = a * dr.power(f_ghz, b)

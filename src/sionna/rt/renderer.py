@@ -12,8 +12,8 @@ import numpy as np
 
 from  sionna import rt
 from .utils import make_render_sensor, paths_to_segments, unmultiply_alpha, \
-                   twosided_diffuse, radio_map_to_textured_rectangle, \
-                   scoped_set_log_level, scene_scale
+                   twosided_diffuse, radio_map_to_emissive_shape, \
+                   scoped_set_log_level, scene_scale, clone_mesh
 
 
 def render(scene: rt.Scene,
@@ -128,10 +128,20 @@ def render(scene: rt.Scene,
         # `visual_scene` up to date.
         sensor = make_render_sensor(scene, camera=camera, resolution=resolution,
                                     fov=fov)
+        exclude_mesh_ids = set()
+
+        rm_is_part_of_scene = False
+        if isinstance(radio_map, rt.MeshRadioMap) and not rm_is_part_of_scene:
+            # Note: we assume that even though the radio map's measurement
+            # surface is mesh-based, it's not a real object that should be
+            # part of the scene. We only render it as part of the overlay.
+            exclude_mesh_ids.add(radio_map.measurement_surface.id())
+
         visual_scene = visual_scene_from_wireless_scene(
             scene, sensor=sensor, max_depth=max_depth,
             clip_at=clip_at, clip_plane_orientation=clip_plane_orientation,
-            envmap=envmap, lighting_scale=lighting_scale
+            envmap=envmap, lighting_scale=lighting_scale,
+            exclude_mesh_ids=exclude_mesh_ids
         )
         visual_scene = mi.load_dict(visual_scene)
 
@@ -143,8 +153,8 @@ def render(scene: rt.Scene,
             scene, sensor, paths=paths,
             show_sources=show_devices, show_targets=show_devices,
             radio_map=radio_map,
-           rm_tx=rm_tx, rm_db_scale=rm_db_scale,
-           rm_vmin=rm_vmin, rm_vmax=rm_vmax, rm_metric=rm_metric
+            rm_tx=rm_tx, rm_db_scale=rm_db_scale,
+            rm_vmin=rm_vmin, rm_vmax=rm_vmax, rm_metric=rm_metric
         )
         if not overlay_scene:
             # Won't need to composite anything, we can just return right away.
@@ -159,12 +169,12 @@ def render(scene: rt.Scene,
         depth_integrator = mi.load_dict({"type": "depth"})
         clipped_depth_integrator = depth_integrator
         if clip_at is not None:
-            clipped_depth_integrator = visual_scene.integrator()\
-                                                        .as_depth_integrator()
+            clipped_depth_integrator = visual_scene.integrator() \
+                                                   .as_depth_integrator()
             unclipped_integrator = mi.load_dict({
                 "type": "path",
                 "max_depth": max_depth,
-                "hide_emitters": True,
+                "hide_emitters": False,
             })
         else:
             unclipped_integrator = visual_scene.integrator()
@@ -194,6 +204,12 @@ def render(scene: rt.Scene,
         # In low-alpha regions, the depth values become imprecise, so we let
         # the overlay image take over.
         prefer_overlay = (alpha1[:, :, None] < 0.1) & (depth1 < 2 * depth2)
+        if rm_is_part_of_scene:
+            # Since the measurement surface is being rendered as part of both
+            # the base and overlay scenes, we add a small threshold to make
+            # sure the radio map from the overly is preferred.
+            prefer_overlay |= np.abs(depth1 - depth2) < 0.01 * np.abs(depth1)
+
         result = np.where(
             (alpha1[:, :, None] > 0) & (depth1 < depth2) & (~prefer_overlay),
             main_image,
@@ -210,7 +226,8 @@ def visual_scene_from_wireless_scene(scene: rt.Scene,
                                      clip_at: float | None = None,
                                      clip_plane_orientation: tuple[float, float, float] = (0, 0, -1),
                                      envmap: str | None = None,
-                                     lighting_scale: float = 1.0) -> dict:
+                                     lighting_scale: float = 1.0,
+                                     exclude_mesh_ids: set[str] = None) -> dict:
     if dr.size_v(mi.Spectrum) != 3:
         raise ValueError("This function is expected to be run using a" +
                          " rendering-focused Mitsuba variant such as" +
@@ -275,30 +292,22 @@ def visual_scene_from_wireless_scene(scene: rt.Scene,
     # --- Shapes (copied from the original scene)
     for i, sh in enumerate(scene.mi_scene.shapes()):
         assert sh.is_mesh()
+        if exclude_mesh_ids and sh.id() in exclude_mesh_ids:
+            continue
 
         # Try and respect the shape's RadioMaterial.color property
         original_id = sh.bsdf().radio_material.name
+        new_id = f"shape-{i}-{sh.id()}"
         props = mi.Properties()
         props["bsdf"] = bsdfs.get(original_id, default_bsdf)
-
-        # TODO: a more straightforward way to do this
-        mesh = mi.Mesh(sh.id(), sh.vertex_count(), sh.face_count(), props,
-                       has_vertex_normals=sh.has_vertex_normals(),
-                       has_vertex_texcoords=sh.has_vertex_texcoords())
-        params = mi.traverse(mesh)
-        params_source = mi.traverse(sh)
-        for k in ['faces', 'vertex_positions', 'vertex_normals',
-                  'vertex_texcoords']:
-            params[k] = params_source[k]
-        params.update()
-        result[f"shape-{i}-{sh.id()}"] = mesh
+        result[new_id] = clone_mesh(sh, name=new_id, props=props)
 
     return result
 
 # pylint: disable=line-too-long
 def get_overlay_scene(scene: rt.Scene, sensor: mi.Sensor, paths: any | None = None,
                       show_sources: bool = True, show_targets: bool = True,
-                      radio_map: rt.CoverageMap | None = None,
+                      radio_map: rt.RadioMap | None = None,
                       rm_tx: int | str | None = None, rm_db_scale: bool = True,
                       rm_vmin: float | None = None, rm_vmax: float | None = None,
                       rm_metric: str = "path_gain") -> dict:
@@ -358,7 +367,7 @@ def get_overlay_scene(scene: rt.Scene, sensor: mi.Sensor, paths: any | None = No
 
     # --- Coverage map
     if radio_map is not None:
-        result["radio-map"] = radio_map_to_textured_rectangle(
+        result["radio-map"] = radio_map_to_emissive_shape(
             radio_map, tx=rm_tx, db_scale=rm_db_scale,
             vmin=rm_vmin, vmax=rm_vmax, rm_metric=rm_metric,
             viewpoint=sensor.world_transform().translation())

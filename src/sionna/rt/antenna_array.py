@@ -47,8 +47,8 @@ class AntennaArray:
     @antenna_pattern.setter
     def antenna_pattern(self, v):
         if not isinstance(v, AntennaPattern):
-            msg = "`antenna_pattern` must be an instance of AntennaPattern."
-            raise TypeError(msg)
+            raise TypeError("`antenna_pattern` must be an instance of type"
+                            f" AntennaPattern, found type '{type(v)}'.")
         self._antenna_pattern = v
 
     def positions(self, wavelength: float) -> mi.Point3f:
@@ -169,7 +169,7 @@ class PlanarArray(AntennaArray):
 
     Example
     -------
-    .. code-block:: Python
+    .. code-block:: python
 
         from sionna.rt import PlanarArray
         array = PlanarArray(num_rows=8, num_cols=4,
@@ -198,15 +198,10 @@ class PlanarArray(AntennaArray):
         d_v = vertical_spacing
         d_h = horizontal_spacing
         normalized_positions =  dr.zeros(mi.Point3f, array_size)
-
-        for i in range(num_rows):
-            for j in range(num_cols):
-                # Index of the antenna
-                ind = i + j*num_rows
-                # Set Y-Z positions
-                # An offset is added to center the panel around the origin
-                normalized_positions.y[ind] =  j*d_h - (num_cols-1)*d_h/2
-                normalized_positions.z[ind] = -i*d_v + (num_rows-1)*d_v/2
+        ii, jj = dr.meshgrid(dr.arange(mi.UInt, num_rows), dr.arange(mi.UInt, num_cols))
+        # Set Y-Z positions
+        normalized_positions.y =  d_h*jj - (num_cols-1)*d_h/2
+        normalized_positions.z = -d_v*ii + (num_rows-1)*d_v/2
 
         # Positions
         super().__init__(antenna_pattern, normalized_positions)

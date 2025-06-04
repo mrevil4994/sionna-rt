@@ -15,6 +15,7 @@ from copy import deepcopy
 import re
 import xml.etree.ElementTree as ET
 from typing import List
+import contextlib
 
 import drjit as dr
 import matplotlib
@@ -55,7 +56,7 @@ class Scene:
 
     `Example scenes <https://nvlabs.github.io/sionna/rt/api/scene.html#examples>`_ can be loaded as follows:
 
-    .. code-block:: Python
+    .. code-block:: python
 
         from sionna.rt import load_scene
         scene = load_scene(sionna.rt.scene.munich)
@@ -252,7 +253,7 @@ class Scene:
     def get(self, name: str) -> (
         None |
         sionna.rt.RadioDevice |
-        sionna.rt.RadioMaterialBase
+        RadioMaterialBase
     ) :
         # pylint: disable=line-too-long
         r"""
@@ -272,7 +273,7 @@ class Scene:
 
     def add(self,
             item: (sionna.rt.RadioDevice |
-                   sionna.rt.RadioMaterialBase)
+                   RadioMaterialBase)
     ) -> None:
         # pylint: disable=line-too-long
         r"""
@@ -287,9 +288,8 @@ class Scene:
         s_item = self.get(name)
         if s_item is not None:
             if s_item is not item:
-                msg = f"Name '{name}' is already used by another item of the"\
-                       " scene"
-                raise ValueError(msg)
+                raise ValueError(f"Name '{name}' is already used by another item"
+                                 " of the scene")
 
             # This exact item was already added, skip it.
             return
@@ -325,18 +325,17 @@ class Scene:
             pass
         elif isinstance(item, RadioMaterialBase):
             if item.is_used:
-                msg = f"The radio material '{name}' is used by at least one"\
-                        " object"
-                raise ValueError(msg)
+                raise ValueError(f"Cannot remove the radio material '{name}'"
+                                  " because it is still used by at least one"
+                                  " object")
             del self._radio_materials[name]
         elif isinstance(item, Transmitter):
             del self._transmitters[name]
         elif isinstance(item, Receiver):
             del self._receivers[name]
         else:
-            msg = "Only Transmitters, Receivers, or"\
-                  " RadioMaterials can be removed"
-            raise TypeError(msg)
+            raise TypeError("Only Transmitters, Receivers, or RadioMaterials"
+                            " can be removed")
 
     def edit(self,
              add: (sionna.rt.SceneObject |
@@ -372,16 +371,17 @@ class Scene:
         # the users valid
         scene_objects = self._scene_objects
         if add is not None:
-            if isinstance(add, SceneObject):
+            if isinstance(add, sionna.rt.SceneObject):
                 add = [add]
             scene_objects.update({o.name : o for o in add})
         self._scene_objects = {}
         for s in self._scene.shapes():
-            name = SceneObject.shape_id_to_name(s.id())
+            name = sionna.rt.SceneObject.shape_id_to_name(s.id())
             obj = scene_objects.get(name)
             assert obj
-            obj.mi_shape = s
+            obj.mi_mesh = s
             self._add_scene_object(obj)
+
 
         # Reset the preview widget to ensure the preview is redraw
         self.scene_geometry_updated()
@@ -392,7 +392,7 @@ class Scene:
         clip_plane_orientation: tuple[float, float, float]=(0,0,-1),
         fov: float=45.,
         paths: sionna.rt.Paths | None=None,
-        radio_map: sionna.rt.RadioMap | None=None,
+        radio_map: sionna.rt.PlanarRadioMap | sionna.rt.MeshRadioMap | None=None,
         resolution: tuple[int, int]=(655, 500),
         rm_db_scale: bool=True,
         rm_metric : str ="path_gain",
@@ -487,9 +487,14 @@ class Scene:
         if show_devices:
             fig.plot_radio_devices(show_orientations=show_orientations)
         if radio_map is not None:
-            fig.plot_radio_map(
-                radio_map, tx=rm_tx, db_scale=rm_db_scale,
-                vmin=rm_vmin, vmax=rm_vmax, metric=rm_metric)
+            if isinstance(radio_map, sionna.rt.MeshRadioMap):
+                fig.plot_mesh_radio_map(
+                    radio_map, tx=rm_tx, db_scale=rm_db_scale,
+                    vmin=rm_vmin, vmax=rm_vmax, metric=rm_metric)
+            else:
+                fig.plot_planar_radio_map(
+                    radio_map, tx=rm_tx, db_scale=rm_db_scale,
+                    vmin=rm_vmin, vmax=rm_vmax, metric=rm_metric)
         # Show legend
         if show_paths or show_devices:
             fig.show_legend(show_paths=show_paths, show_devices=show_devices)
@@ -858,6 +863,13 @@ class Scene:
     # Internal methods
     ##################################################
 
+    @contextlib.contextmanager
+    def use_mi_scene(self, scene: mi.Scene):
+        old_scene = self._scene
+        self._scene = scene
+        yield
+        self._scene = old_scene
+
     def _load_scene_objects(self):
         """
         Builds Sionna SceneObject instances from the Mistuba scene
@@ -874,7 +886,7 @@ class Scene:
                 raise TypeError('Only triangle meshes are supported')
 
             # Instantiate the scene object
-            scene_object = SceneObject(mi_shape=s)
+            scene_object = sionna.rt.SceneObject(mi_mesh=s)
 
             # Add a scene object to the scene
             self._add_scene_object(scene_object)
@@ -887,24 +899,25 @@ class Scene:
         :param scene_object: Object to add
         """
 
-        if not isinstance(scene_object, SceneObject):
+        if not isinstance(scene_object, sionna.rt.SceneObject):
             raise ValueError("The input must be a SceneObject")
 
         name = scene_object.name
         s_item = self.get(name)
         if s_item is not None:
             if  s_item is not scene_object:
-                msg = f"Name '{name}' is already used by another item of the"\
-                       " scene"
-                raise ValueError(msg)
+                raise ValueError(f"Name '{name}' is already used by another item"
+                                 " of the scene")
             else:
                 # This item was already added.
                 return
 
         # Add the scene object and its material
+
+        # Check if the scene object is a measurement surface
         if not scene_object.radio_material:
             raise ValueError(f"Object {scene_object.name} has no radio"
-                                " material assigned to it")
+                             " material assigned to it")
         scene_object.scene = self
         self._scene_objects[scene_object.name] = scene_object
         # Add the scene object radio material as well
@@ -1044,7 +1057,6 @@ def load_scene(filename: str | None=None,
 
     return Scene(mi_scene=mi_scene)
 
-
 def process_xml(fname: str,
                 merge_shapes: bool=True,
                 merge_shapes_exclude_regex: str | None=None,
@@ -1073,45 +1085,55 @@ def process_xml(fname: str,
     else:
         regex = None
 
-    radio_bsdf_types = {
-        "radio-material",
-        "itu-radio-material",
-        "holder-material",
-    }
-
     tree = ET.parse(fname)
     root = tree.getroot()
 
     # 1. Replace BSDFs with radio BSDFs
+    # If a BSDF node in the XML scene has a special name starting with
+    # `mat-itu_` or `itu_`, we automatically convert that BSDF to an
+    # `itu-radio-material` plugin.
+    # All other nodes are left untouched, assuming that they already are
+    # radio materials.
+    #
+    # Finally, all BSDF nodes that are not HolderMaterial are wrapped in a
+    # HolderMaterial node, in order to enable setting the BSDF after the scene
+    # has been loaded. Note this is a temporary measure until a
+    # `Shape::set_bsdf()` method is available.
+    #
     # We don't need to process BSDFs nested in other BSDFs, e.g. a `diffuse`
     # inside of a `twosided`. We just process the outermost BSDF element.
     for bsdf in root.findall("./bsdf") + root.findall(".//shape/bsdf"):
         bsdf_type = bsdf.attrib.get("type")
-        if bsdf_type not in radio_bsdf_types:
+        mat_id = bsdf.attrib.get("id")
 
-            mat_id = bsdf.attrib.get("id")
-            bsdf_type = "radio-material"
-            props = {
-                "thickness": ("float", default_thickness),
-            }
+        # Ensure compatibility with Sionna v0.x ITU radio materials
+        name = mat_id
+        if name.startswith("mat-"):
+            name = name[4:]
+        if name.startswith("itu_"):
+            bsdf_type = "itu-radio-material"
+            props = {}
 
-            # If it's a known material, pre-fill the right properties
-            name = mat_id
-            if name.startswith("mat-"):
-                name = name[4:]
-            if name.startswith("itu_"):
-                bsdf_type = "itu-radio-material"
-                props["type"] = ("string", name[4:])
-            else:
-                # Otherwise, we didn't recognize the name so we don't do
-                # anything special with it.
-                pass
+            # Preserve user-defined thickness, if any
+            thickness = default_thickness
+            # Returns first match
+            thickness_prop = bsdf.find("float[@name='thickness']")
+            if thickness_prop is not None:
+                thickness = float(thickness_prop.get("value", thickness))
+
+            # Read user-defined material type, if any
+            itu_type = name[4:]
+            type_prop = bsdf.find("string[@name='type']")
+            if type_prop is not None:
+                itu_type = type_prop.get("value")
+
+            props["type"] = ("string", itu_type)
+            props["thickness"] = ("float", thickness)
 
             # TODO: we could consider saving some information about the original
             # "visual" BSDFs if that allows users to customize the look of their
             # scenes easily from Blender.
             bsdf.clear()
-
             bsdf.attrib["type"] = bsdf_type
             if mat_id is not None:
                 bsdf.attrib["id"] = mat_id
@@ -1129,65 +1151,86 @@ def process_xml(fname: str,
             bsdf.append(inner)
 
     # 2. Wrap shapes into a `merge` shape if requested. Shapes that are
-    # not merged are assigned indivdial material holder to allow setting their
-    # radio material individually.
-    merge = ET.Element("shape", {"type": "merge", "id": "merged-shapes"})
+    # not merged are assigned individual material holder instances to allow
+    # setting their radio material individually.
+    merge_node = ET.Element("shape", {"type": "merge", "id": "merged-shapes"})
     merge_node_empty = True
     for shape in root.findall("shape"):
         # Shape id
         shape_id = shape.attrib.get("id")
+
         # BSDF node
-        rm_name = None
-        rm_ref = None
-        # Check of inner-BSDF
+        rm_id = None
+        rm_node = None
+        # Check for a BSDF nested directly under the shape
         for bsdf in shape.findall('bsdf'):
-            assert rm_name is None,\
-                "Only a single BSDF can be assigned to a shape"
+            assert rm_id is None, \
+                   "Only a single BSDF can be assigned to a shape"
             assert bsdf.attrib["type"] == "holder-material"
             rm_node = bsdf.find("bsdf")
-            rm_name = rm_node.attrib["id"]
+            rm_id = rm_node.attrib["id"]
         # Check for reference to BSDF
-        for rm_ref in shape.findall('ref'):
-            if rm_ref.get('name') == 'bsdf':
-                assert rm_name is None,\
-                    "Only a single BSDF can be assigned to a shape"
-                rm_name = rm_ref.attrib.get("id")
-        #
-        if (not merge_shapes) or (
-            (merge_shapes_exclude_regex is not None) and
-            regex.search(shape.attrib.get("id", "")) ):
-            # Create an individual radio material holder for this shape
-            bsdf_holder = ET.SubElement(shape, 'bsdf',
-                                        {'type': 'holder-material',
-                                         'id': f'mat-holder-{shape_id}'})
-            ET.SubElement(bsdf_holder, 'ref', {"name": "bsdf",
-                                                  "id": rm_name})
-            # Remove the reference to the radio material
-            if rm_ref is not None:
-                shape.remove(rm_ref)
-        else:
-            # Use the generic radio material holder
-            rm_ref.attrib["id"] = "holder-" + rm_name
+        for nested_ref in shape.findall('ref'):
+            # The 'name' property of the ID is somewhat arbitrary.
+            # Instead, look up the target at the top-level of the scene
+            # and check whether it is a BSDF.
+            target_id = nested_ref.attrib.get("id")
+            target_is_bsdf = (
+                (root.find(f".//bsdf[@id='{target_id}']") is not None)
+                or (merge_node.find(f".//bsdf[@id='{target_id}']") is not None)
+            )
+            if target_is_bsdf:
+                assert rm_id is None, \
+                       "Only a single BSDF can be assigned to a shape"
+                rm_id = target_id
+                rm_node = nested_ref
+
+        # Decide whether or not to merge this shape.
+        should_merge = merge_shapes and not (
+            (merge_shapes_exclude_regex is not None)
+            and regex.search(shape.attrib.get("id", ""))
+        )
+        if rm_node is not None:
+            if should_merge:
+                # Use the generic radio material holder
+                if rm_node.tag == "ref":
+                    # Redirect the reference to the common holder material
+                    # for this radio material.
+                    rm_node.attrib["id"] = "holder-" + rm_id
+                else:
+                    # BSDF is already nested in the shape, let it be.
+                    pass
+            else:
+                # User requested not to merge this shape,
+                # create an individual radio material holder for it.
+                bsdf_holder = ET.SubElement(shape, 'bsdf',
+                                            {'type': 'holder-material',
+                                             'id': f'mat-holder-{shape_id}'})
+                bsdf_holder.append(rm_node)
+                shape.remove(rm_node)
+
+        if should_merge:
             # Add the shape to the merge node
             root.remove(shape)
-            merge.append(shape)
+            merge_node.append(shape)
             #
             merge_node_empty = False
+
     if not merge_node_empty:
-        root.append(merge)
+        root.append(merge_node)
 
     ET.indent(root, space="    ")
     return ET.tostring(root).decode("utf-8")
 
 def edit_scene_shapes(
-    scene: Scene,
-    add: (sionna.rt.SceneObject |
-                   list[sionna.rt.SceneObject] |
+    scene: sionna.rt.Scene,
+    add: (SceneObject |
+                   list[SceneObject] |
                    dict |
                    None)=None,
     remove: (str |
-             sionna.rt.SceneObject |
-             list[sionna.rt.SceneObject | str] |
+             SceneObject |
+             list[SceneObject | str] |
              None)=None,
     return_dict: bool=False
 ) -> dict | mi.Scene:
@@ -1244,12 +1287,12 @@ def edit_scene_shapes(
 
         for v in remove:
             if isinstance(v, SceneObject):
-                v = v.mi_shape
+                v = v.mi_mesh
 
             if isinstance(v, str):
                 o = scene.objects.get(v)
                 if o:
-                    mi_id = o.mi_shape.id()
+                    mi_id = o.mi_mesh.id()
                     ids_to_remove.add(mi_id)
             elif isinstance(v, mi.Shape):
                 v_id = v.id()
@@ -1287,7 +1330,7 @@ def edit_scene_shapes(
 
         for a in add:
             if isinstance(a, SceneObject):
-                a = a.mi_shape
+                a = a.mi_mesh
 
             if isinstance(a, dict):
                 new_id = a.get("id")
@@ -1318,6 +1361,34 @@ def edit_scene_shapes(
         return result
     else:
         return mi.load_dict(result)
+
+def extend_scene_with_mesh(scene: mi.Scene, mesh: mi.Mesh):
+    """
+    Add a mesh to a Mitsuba scene
+
+    This function takes a Mitsuba scene and a mesh, and adds the mesh
+    to the scene.
+
+    :param scene: The Mitsuba scene to which the mesh will be added.
+    :param mesh: The Mitsuba mesh to be added to the scene.
+
+    :return: New Mitsuba scene with the mesh added
+    """
+
+    # Result scene as a dict
+    result = {
+        "type": "scene",
+    }
+
+    # Add to `result` all shapes of the current shapes
+    for s in scene.shapes():
+        shape_id = s.id()
+        result[shape_id] = s
+
+    # Add the shape
+    result[mesh.id()] = mesh
+
+    return mi.load_dict(result)
 
 
 #
@@ -1414,6 +1485,19 @@ The data is licensed under the `Open Data Commons Open Database License (ODbL) <
    :align: center
 """
 
+san_francisco = str(files(scenes).joinpath("san_francisco/san_francisco.xml"))
+# pylint: disable=C0301
+"""
+Example scene containing a portion of San Francisco.
+The scene was created with data downloaded from `OpenStreetMap <https://www.openstreetmap.org>`_ and
+the help of `Blender <https://www.blender.org>`_ and the `Blender-OSM <https://github.com/vvoovv/blender-osm>`_
+and `Mitsuba Blender <https://github.com/mitsuba-renderer/mitsuba-blender>`_ add-ons.
+The data is licensed under the `Open Data Commons Open Database License (ODbL) <https://openstreetmap.org/copyright>`_.
+
+.. figure:: ../figures/san_francisco.png
+   :align: center
+"""
+
 low_poly_car = str(files(scenes).joinpath("low_poly_car.ply"))
 # pylint: disable=C0301
 """
@@ -1421,6 +1505,17 @@ Simple mesh of a car
 
 .. figure:: ../figures/low_poly_car.png
    :align: center
+   :width: 50%
+"""
+
+sphere = str(files(scenes).joinpath("sphere.ply"))
+# pylint: disable=C0301
+"""
+Mesh of a sphere
+
+.. figure:: ../figures/sphere.png
+   :align: center
+   :width: 50%
 """
 
 floor_wall = str(files(scenes).joinpath("floor_wall/floor_wall.xml"))

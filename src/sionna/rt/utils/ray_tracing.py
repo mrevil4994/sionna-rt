@@ -26,11 +26,7 @@ def fibonacci_lattice(num_points : int) -> mi.Point2f:
     x = x - dr.floor(x)
     y = ns/(num_points-1)
 
-    points = mi.Point2f()
-    points.x = x
-    points.y = y
-
-    return points
+    return mi.Point2f(x, y)
 
 def spawn_ray_from_sources(
     lattice : Callable[[int], mi.Point2f],

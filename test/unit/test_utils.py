@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import os
+
 import pytest
 import mitsuba as mi
 import numpy as np
@@ -13,7 +15,7 @@ from scipy.spatial.transform import Rotation as scipy_rotation
 from sionna.rt.utils import complex_sqrt, fresnel_reflection_coefficients_simplified,\
     complex_relative_permittivity, itu_coefficients_single_layer_slab,\
     rotation_matrix, cpx_abs, cpx_add, cpx_div, cpx_exp, cpx_mul, cpx_sqrt, cpx_sub,\
-    cpx_convert, sinc
+    cpx_convert, sinc, transform_mesh, load_mesh
 
 #############################################################
 # Constants
@@ -39,7 +41,7 @@ def ref_complex_relative_permittivity(eta_r, sigma, omega):
 
 def ref_fresnel_reflection_coefficients_simplified(cos_theta, eta):
     """
-    Computes the Fresnel transverse electic (TE) and transverse magnetic (TM)
+    Computes the Fresnel transverse electric (TE) and transverse magnetic (TM)
     reflection coefficients assuming the medium in which the incident wave
     propagates is air. `cos_theta` is the cosine of the angle of incidence, and
     `eta` the complex relative permittivity.
@@ -626,3 +628,58 @@ def test_sinc_gradient():
     y = sinc(x)
     dr.backward(y)
     assert x.grad[0] == 0
+
+#############################################################
+# Tests - Shapes
+#############################################################
+
+def test_transform_mesh():
+    """Test mesh transformation using translation, rotation, and scaling."""
+
+    fname = os.path.join(os.path.dirname(__file__),
+                         "../data/subdivided_cube.ply")
+    mesh = load_mesh(fname)
+
+    # Read original vertices
+    params = mi.traverse(mesh)
+    vertices = params["vertex_positions"].numpy()
+    vertices = vertices.reshape(-1, 3)
+
+    # Edit the mesh
+    t = np.array([0, 0, 0])
+    rot = np.array([dr.pi*0.25, dr.pi*0.3, 0])
+    scale = np.array([1, 1, 1])
+    transform_mesh(mesh,
+                   translation=t,
+                   rotation=rot,
+                   scale=scale)
+    # Read the transformed vertices
+    params = mi.traverse(mesh)
+    vertices_transformed = params["vertex_positions"].numpy()
+    vertices_transformed = vertices_transformed.reshape(-1, 3)
+
+    # Apply transformation with numpy/scipy
+    t = t[None,:]
+    scale = scale[None,:]
+
+    # Center the mesh
+    ref_vertices = vertices.copy()
+    c = 0.5*(np.max(ref_vertices, axis=0, keepdims=True)
+             + np.min(ref_vertices, axis=0, keepdims=True))
+    ref_vertices -= c
+
+    # Scale the mesh
+    ref_vertices *= scale
+
+    # Rotate the mesh
+    rot_matrix = scipy_rotation.from_euler('xyz', [rot[2], rot[1], rot[0]]).as_matrix()
+    rot_matrix = rot_matrix[None,...]
+    ref_vertices = ref_vertices[...,None]
+    ref_vertices = rot_matrix[None,...]@ref_vertices
+    ref_vertices = ref_vertices.squeeze()
+
+    # Translate the mesh
+    ref_vertices += t + c
+
+    max_rel_se = np.max(np.abs(vertices_transformed - ref_vertices))
+    assert np.isclose(max_rel_se, 0, atol=1e-6)

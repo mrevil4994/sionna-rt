@@ -6,4 +6,6 @@
 """Radio Map Solver Module of Sionna RT"""
 
 from .radio_map_solver import RadioMapSolver
+from .planar_radio_map import PlanarRadioMap
+from .mesh_radio_map import MeshRadioMap
 from .radio_map import RadioMap

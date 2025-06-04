@@ -5,11 +5,13 @@
 
 """Class representing objects in the scene"""
 
+from __future__ import annotations
+
 import drjit as dr
 import mitsuba as mi
 import os
-
 from .utils import theta_phi_from_unit_vec, rotation_matrix
+from .utils.meshes import clone_mesh
 from .radio_materials import RadioMaterialBase, HolderMaterial
 from . import scene as scene_module
 from sionna.rt import RadioDevice
@@ -24,14 +26,34 @@ class SceneObject:
     or by loading a mesh from a file. In the latter case, a name
     and radio material for the scene object must be provided.
 
-    :param mi_shape: Mitsuba shape.
+    To create a scene object from a mesh file, use the following approach:
+
+    .. code-block:: python
+
+        obj = SceneObject(fname=sionna.rt.scene.sphere,
+                        name="sphere",
+                        radio_material=ITURadioMaterial(name="sphere-material",
+                                                        itu_type="metal",
+                                                        thickness=0.01))
+
+    To instantiate a scene object using a Mitsuba shape, follow these steps:
+
+    .. code-block:: python
+
+        mesh = load_mesh(sionna.rt.scene.sphere)
+        obj = SceneObject(mi_mesh=mesh,
+                          name="sphere",
+                          radio_material=ITURadioMaterial(name="sphere-material",
+                                                        itu_type="metal",
+                                                        thickness=0.01))
+    :param mi_mesh: Mitsuba shape.
         Must be provided if ``fname`` is :py:class:`None`.
 
     :param name: Object name.
         Must be provided if ``fname`` is not :py:class:`None`.
 
     :param fname: Filename of a valid mesh ( "*.ply" | "*.obj").
-        Must be provided if ``mi_shape`` is :py:class:`None`.
+        Must be provided if ``mi_mesh`` is :py:class:`None`.
 
     :param radio_material: Radio material of the object.
         Must be provided if ``fname`` is not :py:class:`None`.
@@ -40,58 +62,72 @@ class SceneObject:
     NO_NAME_COUNTER = 0
 
     def __init__(self,
-                 mi_shape: mi.Mesh | None=None,
+                 mi_mesh: mi.Mesh | None=None,
                  name: str | None=None,
                  fname: str | None=None,
                  radio_material: RadioMaterialBase | None=None):
 
-        if mi_shape:
-            if not isinstance(mi_shape, mi.Mesh):
-                raise ValueError("`mi_shape` must a Mitsuba Shape object")
-            if not isinstance(mi_shape.bsdf(), HolderMaterial):
-                raise ValueError("The BSDF of `mi_shape` must be a"
+        if mi_mesh:
+            if not isinstance(mi_mesh, mi.Mesh):
+                raise ValueError("`mi_mesh` must a Mitsuba Shape object")
+            if not isinstance(mi_mesh.bsdf(), HolderMaterial):
+                raise ValueError("The BSDF of `mi_mesh` must be a"
                                  " HolderMaterial object")
+            if radio_material is not None:
+                mi_mesh.bsdf().radio_material = radio_material
+
         elif fname:
             # Mesh type
             mesh_type = os.path.splitext(fname)[1][1:]
             if mesh_type not in ('ply', 'obj'):
                 raise ValueError("Invalid mesh type."
                                  " Supported types: `ply` and `obj`")
-            if not isinstance(name, str):
-                raise ValueError("The `name` of the object to instantiate must"
-                                 " be an str")
             if not isinstance(radio_material, RadioMaterialBase):
                 raise ValueError("The `radio_material` for the object to"
                                  " instantiate must be a RadioMaterialBase")
 
-            mi_shape = mi.load_dict({'type': mesh_type,
-                                     'id' : name,
+            mi_mesh = mi.load_dict({'type': mesh_type,
                                      'filename': fname,
                                      'flip_normals': True,
-                                     'bsdf' : {'type': 'holder-material',
-                                               'id': f'mat-holder-{name}'}
+                                     'bsdf' : {'type': 'holder-material'}
                                      })
-            mi_shape.bsdf().radio_material = radio_material
+            mi_mesh.bsdf().radio_material = radio_material
         else:
-            raise ValueError("Either a Mitsuba Shape (mi_shape) or a filename"
+            raise ValueError("Either a Mitsuba Shape (mi_mesh) or a filename"
                              " (fname) must be provided")
 
+        # Object naming.
+        if name is not None:
+            # If a `name` parameter is provided, adopt it regardless of the current
+            # Mitsuba shape's ID.
+            if not isinstance(name, str):
+                raise ValueError("The `name` of the object to instantiate must"
+                                 f" be a `str`, found `{type(name)}` instead.")
+            mi_mesh.set_id(name)
+            mi_mesh.bsdf().set_id("mat-holder-" + name)
+        elif mi_mesh.id() in ("", "__root__"):
+            # Default name.
+            SceneObject.NO_NAME_COUNTER += 1
+            name = f"no-name-{SceneObject.NO_NAME_COUNTER}"
+            mi_mesh.set_id(name)
+            mi_mesh.bsdf().set_id("mat-holder-" + name)
+        else:
+            # Otherwise, keep the current Mitsuba shape's ID.
+            pass
+        del name
+
         # Set the Mitsuba shape
-        self._mi_shape = mi_shape
+        self._mi_mesh = mi_mesh
 
         # Scene object to which the object belongs
         self._scene = None
 
-        # Read the ID from the Mitsuba Shape
+        # Read the ID from the Mitsuba Shape.
         # The object ID is the corresponding Mitsuba shape pointer
-        # reinterpreted as an UInt32
+        # reinterpreted as an UInt32 (not the object's name).
         self._object_id = dr.reinterpret_array(mi.UInt32,
-                                               mi.ShapePtr(mi_shape))[0]
+                                               mi.ShapePtr(mi_mesh))[0]
 
-        if mi_shape.id() == "":
-            SceneObject.NO_NAME_COUNTER += 1
-            name = f"no-name-{SceneObject.NO_NAME_COUNTER}"
-            mi_shape.set_id(name)
 
         # Increment the material counter of objects
         self.radio_material.add_object()
@@ -116,9 +152,8 @@ class SceneObject:
         if not isinstance(scene, scene_module.Scene):
             raise ValueError("`scene` must be an instance of Scene")
         if (self._scene is not None) and (self._scene is not scene):
-            msg = f"Radio material ('{self.name}') already used by another "\
-                "scene"
-            raise ValueError(msg)
+            raise ValueError(f"Radio material ('{self.name}') is already used"
+                             " by another scene.")
         self._scene = scene
 
     @staticmethod
@@ -134,7 +169,7 @@ class SceneObject:
 
         :type: :py:class:`str`
         """
-        return SceneObject.shape_id_to_name(self._mi_shape.id())
+        return SceneObject.shape_id_to_name(self._mi_mesh.id())
 
     @property
     def object_id(self):
@@ -145,16 +180,16 @@ class SceneObject:
         return self._object_id
 
     @property
-    def mi_shape(self):
+    def mi_mesh(self):
         r"""Get/set the Mitsuba shape
 
         :type: :py:class:`mi.Mesh`
         """
-        return self._mi_shape
+        return self._mi_mesh
 
-    @mi_shape.setter
-    def mi_shape(self, v: mi.Mesh):
-        self._mi_shape = v
+    @mi_mesh.setter
+    def mi_mesh(self, v: mi.Mesh):
+        self._mi_mesh = v
 
     @property
     def radio_material(self):
@@ -164,7 +199,7 @@ class SceneObject:
 
         :type: :class:`~sionna.rt.RadioMaterialBase`
         """
-        return self._mi_shape.bsdf().radio_material
+        return self._mi_mesh.bsdf().radio_material
 
     @radio_material.setter
     def radio_material(self, mat: HolderMaterial | str | RadioMaterialBase):
@@ -176,13 +211,11 @@ class SceneObject:
             mat_obj = self._scene.get(mat)
             if ( (mat_obj is None) or
                  (not isinstance(mat_obj, RadioMaterialBase)) ):
-                err_msg = f"Unknown radio material '{mat}'"
-                raise TypeError(err_msg)
+                raise TypeError(f"Unknown radio material '{mat}'")
 
         elif not isinstance(mat, RadioMaterialBase):
-            err_msg = ("The material must be a material name (str) or an "
-                        "instance of RadioMaterialBase")
-            raise TypeError(err_msg)
+            raise TypeError("The material must be a material name (str) or an "
+                            f"instance of RadioMaterialBase, found {type(mat)}")
 
         else:
             mat_obj = mat
@@ -195,8 +228,8 @@ class SceneObject:
             self._scene.add(mat_obj)
             # Ensure that the object and the material belong to the same scene
             if self._scene != mat_obj.scene:
-                msg = "Radio material and object are not part of the same scene"
-                raise ValueError(msg)
+                raise ValueError("Radio material and object are not part of the"
+                                 " same scene")
 
         # Increment the material counter of objects
         mat_obj.add_object()
@@ -207,7 +240,7 @@ class SceneObject:
 
         # Effectively update the radio material of the Mitsuba shape
         # via our HolderBSDF proxy object:
-        self._mi_shape.bsdf().radio_material = mat_obj
+        self._mi_mesh.bsdf().radio_material = mat_obj
 
     @property
     def velocity(self):
@@ -215,11 +248,11 @@ class SceneObject:
 
         :type: :py:class:`mi.Vector3f`
         """
-        return self._mi_shape.bsdf().velocity
+        return self._mi_mesh.bsdf().velocity
 
     @velocity.setter
     def velocity(self, v: mi.Vector3f):
-        self._mi_shape.bsdf().velocity = v
+        self._mi_mesh.bsdf().velocity = v
 
     @property
     def position(self):
@@ -229,20 +262,24 @@ class SceneObject:
         :type: :py:class:`mi.Point3f`
         """
         # Bounding box
-        bbox_min = self._mi_shape.bbox().min
-        bbox_max = self._mi_shape.bbox().max
+        bbox_min = self._mi_mesh.bbox().min
+        bbox_max = self._mi_mesh.bbox().max
         position = (bbox_min + bbox_max)*0.5
         return mi.Point3f(position)
 
     @position.setter
     def position(self, new_position: mi.Point3f):
 
+        if self._scene is None:
+            raise ValueError("Scene is not set: Object must be added to a"
+                             " scene before setting its position")
+
         # Scene parameters
         scene_params = self._scene.mi_scene_params
 
         # Use the shape id, and not the object name, to access the Mitsuba
         # scene
-        vp_key = self._mi_shape.id() + ".vertex_positions"
+        vp_key = self._mi_mesh.id() + ".vertex_positions"
 
         current_vertices = dr.unravel(mi.Point3f, scene_params[vp_key])
         translation_vector = new_position - self.position
@@ -265,6 +302,10 @@ class SceneObject:
     @orientation.setter
     def orientation(self, new_orientation: mi.Point3f):
 
+        if self._scene is None:
+            raise ValueError("Scene is not set: Object must be added to a"
+                             " scene before setting its orientation")
+
         new_orientation = mi.Point3f(new_orientation)
 
         # Build the transformtation corresponding to the new rotation
@@ -279,7 +320,7 @@ class SceneObject:
 
         # Use the shape id, and not the object name, to access the Mitsuba
         # scene
-        vp_key = self._mi_shape.id() + ".vertex_positions"
+        vp_key = self._mi_mesh.id() + ".vertex_positions"
 
         # To rotate the object, we need to:
         # 1. Position such that its center is (0,0,0)
@@ -301,8 +342,13 @@ class SceneObject:
     @property
     def scaling(self):
         r"""Get the scaling in the coordinate system of the object.
+        If a scalar value is provided, the object is uniformly scaled
+        across all dimensions by that value. Alternatively, if a vector
+        is provided, the object is scaled independently along the x, y,
+        and z axes according to the respective components of the vector,
+        within the object's coordinate system.
 
-        :type: :py:class:`mi.Vector3f`
+        :type: :py:class:`mi.Float` | :py:class:`mi.Vector3f`
         """
         return self._scaling
 
@@ -311,11 +357,15 @@ class SceneObject:
         r"""Set the scaling value in the coordinate system of the object. If a
         scalar value is passed in, each dimension is scaled equally by
         new_scaling. Otherwise, the object is scaled by the x, y and z values
-        of new_scaling in the coordinate system of the object. 
+        of new_scaling in the coordinate system of the object.
 
         :param new_scaling: The new scaling factor in the objects coordinate
             system. Can be a scalar or a vector value
         """
+        if self._scene is None:
+            raise ValueError("Scene is not set: Object must be added to a"
+                             " scene before setting its scaling")
+
         new_scaling = mi.Vector3f(new_scaling)
 
         if dr.any(new_scaling <= 0.0):
@@ -326,7 +376,7 @@ class SceneObject:
 
         # Use the shape id, and not the object name, to access the Mitsuba
         # scene
-        vp_key = self._mi_shape.id() + ".vertex_positions"
+        vp_key = self._mi_mesh.id() + ".vertex_positions"
 
         # Get the current rotation and it's inverse
         cur_rotation = rotation_matrix(self.orientation)
@@ -352,7 +402,7 @@ class SceneObject:
     def look_at(self, target: mi.Point3f | RadioDevice | str):
         # pylint: disable=line-too-long
         r"""
-        Sets the orientation so that the x-axis points toward an position
+        Sets the orientation so that the x-axis points toward a position
 
         :param target:  A position or the name or instance of an
             object in the scene to point toward to
@@ -374,3 +424,33 @@ class SceneObject:
         beta = theta - dr.pi/2. # Rotation around y-axis
         gamma = 0.0 # Rotation around x-axis
         self.orientation = mi.Point3f(alpha, beta, gamma)
+
+    def clone(self, name: str | None = None, as_mesh=False,
+              props: mi.Properties | None = None) -> SceneObject | mi.Mesh:
+        r"""
+        Creates a clone of the current scene object
+
+        The clone will have the same geometry and material properties as the
+        original object but will be assigned a new name.
+
+        :param name: Name (id) of the cloned object.
+            If :py:class:`None`, the clone will be named as
+            ``<original_name>-clone``.
+
+        :param as_mesh: If set to `True`, the clone will be returned as a
+            :py:class:`mitsuba.Mesh` object. Otherwise, a
+            :py:class:`sionna.rt.SceneObject` will be returned.
+
+        :param props: Pre-populated properties to be used in the new Mitsuba
+            shape. Allows overriding the BSDF, emitter, etc.
+
+        :return: A clone of the current object
+        """
+        cloned_mesh = clone_mesh(self.mi_mesh, name=name, props=props)
+        cloned_mesh.bsdf().radio_material = self.radio_material
+
+        # Build scene object
+        if as_mesh:
+            return cloned_mesh
+        else:
+            return SceneObject(name=cloned_mesh.id(), mi_mesh=cloned_mesh)

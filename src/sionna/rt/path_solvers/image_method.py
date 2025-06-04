@@ -365,7 +365,7 @@ class ImageMethod:
             # - There is an intersection, and
             # - The intersected primitive is the one detected during candidate
             # generation
-            # - The segment lengt is above a pre-defined threshold
+            # - The segment length is above a pre-defined threshold
             valid_inter &= si_scene.is_valid()
             expected_shape = paths.get_shape(depth, valid_inter)
             si_shape = dr.reinterpret_array(mi.UInt, si_scene.shape)

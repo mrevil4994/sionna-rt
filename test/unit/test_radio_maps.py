@@ -3,21 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import os
+import tempfile
+
 import mitsuba as mi
 import numpy as np
 import drjit as dr
-
+import pytest
 import sionna.rt as rt
 from sionna.rt import load_scene, Transmitter, PlanarArray, ITURadioMaterial,\
     Receiver, PathSolver, RadioMapSolver, BackscatteringPattern
-from sionna.rt.utils import dbm_to_watt
+from sionna.rt.utils import dbm_to_watt, load_mesh, transform_mesh
 
 
 ####################################################
 # Utilities
 ####################################################
 
-def paths_to_coverage_map(paths):
+def paths_to_coverage_map(paths, is_mesh=False):
     """
     Converts paths into the equivalent coverage map values.
     The coverage map is assumed to be a ssquare.
@@ -41,12 +44,23 @@ def paths_to_coverage_map(paths):
     # [num_tx, num_rx]
     a = a.T
 
-    # Reshape to coverage map
-    n = int(np.sqrt(a.shape[1]))
-    shape = [a.shape[0], n, n]
-    a = np.reshape(a, shape)
+    if not is_mesh:
+        # Reshape to coverage map
+        n = int(np.sqrt(a.shape[1]))
+        shape = [a.shape[0], n, n]
+        a = np.reshape(a, shape)
 
     return a
+
+def default_array(num_rows: int = 1, num_cols: int = 1,
+                  vertical_spacing: float = 0.5, horizontal_spacing: float = 0.5,
+                  pattern: str = "iso", polarization: str = "V"):
+    return PlanarArray(num_rows=num_rows,
+                       num_cols=num_cols,
+                       vertical_spacing=vertical_spacing,
+                       horizontal_spacing=horizontal_spacing,
+                       pattern=pattern,
+                       polarization=polarization)
 
 def validate_cm(los=False,
                 specular_reflection=False,
@@ -67,33 +81,22 @@ def validate_cm(los=False,
     scene.get("reflector").radio_material.scattering_coefficient = mi.Float(np.sqrt(0.5))
     scene.get("reflector").radio_material.xpd_coefficient = mi.Float(0.3)
 
-    scene.tx_array = PlanarArray(num_rows=1,
-                                 num_cols=1,
-                                 vertical_spacing=0.5,
-                                 horizontal_spacing=0.5,
-                                 pattern=tx_pattern,
-                                 polarization=tx_pol)
-
-    scene.rx_array =  PlanarArray(num_rows=1,
-                                  num_cols=1,
-                                  vertical_spacing=0.5,
-                                  horizontal_spacing=0.5,
-                                  pattern=rx_pattern,
-                                  polarization="VH")
+    scene.tx_array = default_array(pattern=tx_pattern, polarization=tx_pol)
+    scene.rx_array = default_array(pattern=rx_pattern, polarization="VH")
 
     delta = 0.1
     width = 3
     tx = Transmitter(name="tx",
                      position=mi.Point3f(0, 0, .1),
-                     orientation=mi.Point3f(0,0,0))
+                     orientation=mi.Point3f(0, 0, 0))
     scene.add(tx)
 
     rm_solver = RadioMapSolver()
     rm = rm_solver(scene,
                    max_depth=1,
                    cell_size=mi.Point2f(delta, delta),
-                   center=mi.Point3f(0,0,rm_center_z),
-                   orientation=mi.Point3f(0.,0.,0.),
+                   center=mi.Point3f(0, 0, rm_center_z),
+                   orientation=mi.Point3f(0., 0., 0.),
                    size=mi.Point2f(width, width),
                    samples_per_tx=int(1e7),
                    los=los,
@@ -146,24 +149,12 @@ def test_random_positions():
     tx = Transmitter(name="tx", position=tx_pos)
     scene.add(tx)
 
-    scene.tx_array = PlanarArray(num_rows=4,
-                                num_cols=4,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="V")
-    scene.rx_array = PlanarArray(num_rows=4,
-                                num_cols=4,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="V")
+    scene.tx_array = default_array(num_rows=4, num_cols=4)
+    scene.rx_array = default_array(num_rows=4, num_cols=4)
 
     # Position of the measurement plane
     radio_map_pos = dr.copy(scene.transmitters["tx"].position)
     radio_map_pos.z = 1.5
-
-
 
     ### Check with centering set to True
 
@@ -180,7 +171,7 @@ def test_random_positions():
                    diffuse_reflection=True,
                    refraction=True,
                    samples_per_tx=int(1e7))
-    
+
     samples_pos, samples_cell_ind = rm.sample_positions(batch_size,
                                                         min_val_db=-110,
                                                         center_pos=True)
@@ -276,7 +267,6 @@ def test_random_positions():
 
     # Compute radio map
     rm_solver = RadioMapSolver()
-    
     rm = rm_solver(scene,
                    max_depth=5,
                    cell_size=cell_size,
@@ -329,18 +319,8 @@ def test_sinr_map():
                     power_dbm=44)
     scene.add(tx2)
 
-    scene.tx_array = PlanarArray(num_rows=4,
-                                num_cols=4,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="V")
-    scene.rx_array = PlanarArray(num_rows=4,
-                                num_cols=4,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="V")
+    scene.tx_array = default_array(num_rows=4, num_cols=4)
+    scene.rx_array = default_array(num_rows=4, num_cols=4)
 
     rx_pos = dr.copy(scene.transmitters["tx0"].position)
     rx_pos.z = 1.5
@@ -450,19 +430,8 @@ def test_box_01():
     scene.objects["box"].radio_material.scattering_pattern =\
         BackscatteringPattern(alpha_r=30, alpha_i=10, lambda_=0.5)
 
-    scene.tx_array = PlanarArray(num_rows=1,
-                                num_cols=1,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="tr38901",
-                                polarization="V")
-
-    scene.rx_array =  PlanarArray(num_rows=1,
-                                num_cols=1,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="VH")
+    scene.tx_array = default_array(pattern="tr38901")
+    scene.rx_array = default_array(polarization="VH")
 
     scene.add(Transmitter(name="tx",
                   position=mi.Point3f(1.1, 0.8, 2),
@@ -506,19 +475,8 @@ def test_box_02():
     scene.objects["box"].radio_material.scattering_coefficient = 0.2
 
 
-    scene.tx_array = PlanarArray(num_rows=1,
-                                num_cols=1,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="tr38901",
-                                polarization="V")
-
-    scene.rx_array =  PlanarArray(num_rows=1,
-                                num_cols=1,
-                                vertical_spacing=0.5,
-                                horizontal_spacing=0.5,
-                                pattern="iso",
-                                polarization="VH")
+    scene.tx_array = default_array(pattern="tr38901")
+    scene.rx_array = default_array(polarization="VH")
 
     los = True
     specular_reflection = True
@@ -565,3 +523,134 @@ def test_box_02():
     a = paths_to_coverage_map(paths)[0]
     nmse_db = 10*np.log10(np.mean( ((rm.path_gain[0]-a)/a)**2 ))
     assert nmse_db < -20.
+
+@pytest.mark.parametrize("los", [True, False])
+def test_mesh_radio_map(los):
+
+    specular_reflection = True
+    diffuse_reflection = True
+    refraction=False
+    max_depth = 2
+
+    # Setup the scene
+    scene = load_scene(rt.scene.box, merge_shapes=False)
+    scene.objects["box"].radio_material = ITURadioMaterial("concrete", "concrete", 0.1)
+    scene.objects["box"].radio_material.scattering_coefficient = dr.sqrt(0.5)
+    scene.objects["box"].radio_material.scattering_pattern =\
+        BackscatteringPattern(alpha_r=30, alpha_i=10, lambda_=0.5)
+
+    scene.tx_array = default_array()
+    scene.rx_array = default_array(polarization="VH")
+
+    scene.add(Transmitter(name="tx",
+                position=mi.Point3f(4, 3, 4.0),
+                orientation=mi.Point3f(0,0,0),
+                display_radius=0.1))
+    scene.get("tx").look_at(mi.Point3f(0,0,0))
+
+
+    # Load the measurement surface
+    fname = os.path.join(os.path.dirname(__file__),
+                         "../data/subdivided_cube.ply")
+    ms = load_mesh(fname)
+    transform_mesh(ms,
+                   translation=mi.Point3f(0, 0, 2.5),
+                   scale=mi.Point3f(1.5, 1.5, 1))
+
+    # Compute the radio map
+    rm_solver = RadioMapSolver()
+    rm_solver.loop_mode = "evaluated"
+    rm = rm_solver(scene,
+                measurement_surface=ms,
+                samples_per_tx=int(1e7),
+                max_depth=max_depth,
+                los=los,
+                specular_reflection=specular_reflection,
+                diffuse_reflection=diffuse_reflection,
+                refraction=refraction)
+
+    # Check for NaN or Inf
+    assert not (dr.any(dr.isinf(rm.path_gain)) or dr.any(dr.isnan(rm.path_gain)))
+
+    # Add receivers at the cell centers
+    for i, pos in enumerate(rm.cell_centers.numpy().T):
+        scene.remove(f"rx-{i}")
+        scene.add(Receiver(name=f"rx-{i}",
+                            position=pos,
+                            display_radius=0.1,
+                            orientation=mi.Point3f(0, 0, 0)))
+
+    # Compute radio map using the path solver
+    solver = PathSolver()
+    paths = solver(scene,
+                    samples_per_src = 10000,
+                    max_num_paths_per_src=int(1e7),
+                    max_depth=max_depth,
+                    los=los,
+                    specular_reflection=specular_reflection,
+                    diffuse_reflection=diffuse_reflection,
+                    refraction=refraction)
+    a = paths_to_coverage_map(paths, is_mesh=True)[0]
+
+    nmse_db = 10*np.log10(np.mean( ((rm.path_gain[0]-a)/a)**2 ))
+    assert nmse_db < -20
+
+@pytest.mark.parametrize("color_map", [None, np.random.rand(30, 3)])
+def test_show_association(color_map):
+    scene = load_scene(rt.scene.box_two_screens)
+    scene.tx_array = default_array()
+    scene.rx_array = default_array(polarization="VH")
+    bbox = scene.mi_scene.bbox()
+    scene_size = bbox.extents()
+
+    # Many transmitters to make sure that we are not limited by the number of
+    # colors in the colormap.
+    safe_range = 0.8
+    rng = np.random.default_rng(seed=3445)
+    for tx_i in range(20):
+        p = mi.Point3f(rng.uniform(safe_range * bbox.min.x, safe_range * bbox.max.x),
+                       rng.uniform(safe_range * bbox.min.y, safe_range * bbox.max.y),
+                       safe_range * bbox.max.z)
+        tx = Transmitter(name=f"tx-{tx_i}", position=p)
+        scene.add(tx)
+
+    rm_solver = RadioMapSolver()
+    rm = rm_solver(scene,
+                   cell_size=mi.Point2f(0.1, 0.1),
+                   center=mi.Point3f(0, 0, 0.2 * bbox.center().z),
+                   orientation=mi.Point3f(0., 0., 0.),
+                   size=mi.Point2f(scene_size.x, scene_size.y),
+                   samples_per_tx=int(1e4),
+                   max_depth=5)
+
+    if color_map is None:
+        suffix = "default"
+        # Check error handling if given an insufficiently large color map
+        with pytest.raises(ValueError, match=r"The color map has 8 entries.*"):
+            rm.show_association(color_map="Dark2")
+    else:
+        suffix = "custom"
+
+    fig = rm.show_association(color_map=color_map)
+    fig.tight_layout()
+
+    # For visual inspection
+    if False:
+        fname = os.path.join(tempfile.gettempdir(),
+                             f"test_show_association_{suffix}.png")
+        fig.savefig(fname)
+        print(f"Saved figure to: {fname}")
+
+    # For visual inspection
+    if False:
+        fname = os.path.join(tempfile.gettempdir(),
+                             f"test_show_association_preview_{suffix}.png")
+        bbox = scene.mi_scene.bbox()
+        to_world = mi.ScalarTransform4f().look_at(
+            origin=mi.ScalarVector3f(2, 2, 3) * bbox.max,
+            target=mi.ScalarVector3f(1, 1, 0) * bbox.center(),
+            up=[0, 0, 1],
+        )
+        scene.render_to_file(camera=to_world, filename=fname, radio_map=rm,
+                             clip_at=0.5 * bbox.max.z)
+        print(f"Saved rendering to: {fname}")

@@ -13,8 +13,11 @@ from sionna.rt.utils import spawn_ray_from_sources, fibonacci_lattice,\
 from sionna.rt import Scene
 from sionna.rt.antenna_pattern import antenna_pattern_to_world_implicit
 from sionna.rt.constants import InteractionType
-
+from sionna.rt.scene_object import SceneObject
+from sionna.rt.scene import extend_scene_with_mesh
 from .radio_map import RadioMap
+from .planar_radio_map import PlanarRadioMap
+from .mesh_radio_map import MeshRadioMap
 
 
 class RadioMapSolver:
@@ -22,106 +25,91 @@ class RadioMapSolver:
     r"""
     Class that implements the radio map solver
 
-    This solver computes a radio map for every transmitter in the scene.
-    For a given transmitter, a radio map is a rectangular surface with
-    arbitrary orientation subdivded into rectangular cells of size
-    :math:`\lvert C \rvert = \texttt{cell_size[0]} \times  \texttt{cell_size[1]}`.
-    The parameter ``cell_size`` therefore controls the granularity of the
-    map. The radio map associates with every cell :math:`(i,j)` the quantity
+    This solver generates a radio map for each transmitter within the scene.
+    For any given transmitter, the radio map is calculated over a measurement surface that
+    is segmented into flat cells. Each cell :math:`i` in the radio map is associated
+    with the quantity:
 
     .. math::
         :label: cm_def
 
-        g_{i,j} = \frac{1}{\lvert C \rvert} \int_{C_{i,j}} \lvert h(s) \rvert^2 ds
+        g_i = \frac{1}{\lvert C_i \rvert} \int_{C_{i}} \lvert h(s) \rvert^2 ds.
 
-    where :math:`\lvert h(s) \rvert^2` is the squared amplitude
-    of the path coefficients :math:`a_i` at position :math:`s=(x,y)` assuming an
-    ideal isotropic receiver,
-    the integral is over the cell :math:`C_{i,j}`, and
-    :math:`ds` is the infinitesimal small surface element
-    :math:`ds=dx \cdot dy`.
-    The dimension indexed by :math:`i` (:math:`j`) corresponds to the :math:`y\, (x)`-axis of the
-    radio map in its local coordinate system. The quantity
-    :math:`g_{i,j}` can be seen as the average :attr:`~sionna.rt.RadioMap.path_gain` across a cell.
-    This solver computes an approximation of :math:`g_{i,j}` through Monte Carlo integration.
+    Here, :math:`\lvert h(s) \rvert^2` represents the sum of the squared amplitudes of the path coefficients
+    :math:`a_i` at the position :math:`s=(x,y)`, assuming an ideal isotropic receiver.
+    The integral is evaluated over the cell :math:`C_i`, with :math:`ds` being the infinitesimally
+    small surface element, defined as :math:`ds=dx \cdot dy`. The value :math:`g_i` can be interpreted
+    as the average :attr:`~sionna.rt.RadioMap.path_gain` across a cell.
+    This solver approximates :math:`g_i` using Monte Carlo integration. For further details,
+    refer to the `section on the radio map solver of the Sionna RT Technical Report <https://nvlabs.github.io/sionna/rt/tech-report/S4.html>`_.
 
     The path gain can be transformed into the received signal strength (:attr:`~sionna.rt.RadioMap.rss`)
     by multiplying it with the transmit :attr:`~sionna.rt.Transmitter.power`:
 
     .. math::
 
-        \mathrm{RSS}_{i,j} = P_{tx} g_{i,j}.
+        \mathrm{RSS}_{i} = P_{tx} g_{i}.
 
-    If a scene has multiple transmitters, the
-    signal-to-interference-plus-noise ratio
-    (:attr:`~sionna.rt.Transmitter.sinr`) for transmitter :math:`k` is then
-    defined as
+    In scenarios with multiple transmitters, the signal-to-interference-plus-noise ratio (SINR) for a specific
+    transmitter :math:`k` is calculated as follows:
 
     .. math::
 
-        \mathrm{SINR}^k_{i,j}=\frac{\mathrm{RSS}^k_{i,j}}{N_0+\sum_{k'\ne k} \mathrm{RSS}^{k'}_{i,j}}
+        \mathrm{SINR}^k_{i}=\frac{\mathrm{RSS}^k_{i}}{N_0+\sum_{k'\ne k} \mathrm{RSS}^{k'}_{i}}
 
-    where :math:`N_0` [W] is the :attr:`~sionna.rt.Scene.thermal_noise_power`, computed as:
+    where :math:`N_0` [W] represents the thermal noise power of the scene (:attr:`~sionna.rt.Scene.thermal_noise_power`), which is determined by:
 
     .. math::
 
-        N_0 = B \times T \times k
+        N_0 = B \times T \times k.
 
-    where :math:`B` [Hz] is the transmission :attr:`~sionna.rt.Scene.bandwidth`,
-    :math:`T` [K] is the :attr:`~sionna.rt.Scene.temperature`, and
-    :math:`k=1.380649\times 10^{-23}` [J/K] is the Boltzmann constant.
-
-    The output of this function is a real-valued matrix of size ``[num_cells_y, num_cells_x]``,
-    for every transmitter, with elements equal to the sum of the contributions of paths, and where
+    In this equation, :math:`B` [Hz] is the bandwidth of the transmission (:attr:`~sionna.rt.Scene.bandwidth`),
+    :math:`T` [K] is the temperature of the scene (:attr:`~sionna.rt.Scene.temperature`), and
+    :math:`k = 1.380649 \times 10^{-23}` [J/K] is the Boltzmann constant.
+    
+    This solver supports arbitrary meshes as measurement surfaces, where each triangle in the mesh acts as a cell in the radio map.
+    If a mesh is not provided, the solver computes the radio map over a rectangular measurement grid, which is defined by the
+    parameters: ``center``, ``orientation``, ``size``, and ``cell_size``. The resulting output is then a real-valued
+    matrix of dimensions ``[num_cells_y, num_cells_x]`` for each transmitter, where:
 
     .. math::
         \texttt{num_cells_x} = \bigg\lceil\frac{\texttt{size[0]}}{\texttt{cell_size[0]}} \bigg\rceil\\
         \texttt{num_cells_y} = \bigg\lceil \frac{\texttt{size[1]}}{\texttt{cell_size[1]}} \bigg\rceil.
 
-    The surface defining the radio map is a rectangle centered at
-    ``center``, with orientation ``orientation``, and with size
-    ``size``. An orientation of (0,0,0) corresponds to
-    a radio map parallel to the XY plane, with surface normal pointing towards
-    the :math:`+z` axis. By default, the radio map
-    is parallel to the XY plane, covers all of the scene, and has
-    an elevation of :math:`z = 1.5\text{m}`.
-    If transmitter and has multiple antennas, transmit precoding
-    is applied which is defined by ``precoding_vec``.
+    An orientation of (0,0,0) aligns the radio map parallel to the XY plane, with the surface normal directed towards
+    the :math:`+z` axis. By default, the radio map is set parallel to the XY plane, spans the entire scene, and
+    is positioned at an elevation of :math:`z = 1.5\text{m}`.
 
-    For every ray :math:`n` intersecting the radio map cell :math:`(i,j)`, the
-    channel coefficients :math:`a_n` and the angles of departure (AoDs)
-    :math:`(\theta_{\text{T},n}, \varphi_{\text{T},n})`
-    and arrival (AoAs) :math:`(\theta_{\text{R},n}, \varphi_{\text{R},n})`
-    are computed. See the `Primer on Electromagnetics <../em_primer.html>`_ for more details.
+    For transmitters equipped with multiple antennas, transmit precoding is applied as specified by the ``precoding_vec``.
+    For each path :math:`n` that intersects a radio map cell :math:`i`, the channel coefficients :math:`a_n` and the angles
+    of departure (AoDs) :math:`(\theta_{\text{T},n}, \varphi_{\text{T},n})` and arrival
+    (AoAs) :math:`(\theta_{\text{R},n}, \varphi_{\text{R},n})` are determined. For further information, refer to the
+    `Primer on Electromagnetics <../em_primer.html>`_.
 
-    A "synthetic" array is simulated by adding additional phase shifts that depend on the
-    antenna position relative to the position of the transmitter as well as the AoDs.
-    Let us denote by :math:`\mathbf{d}_{\text{T},k}\in\mathbb{R}^3` the relative position of
-    the :math:`k^\text{th}` antenna (with respect to
-    the position of the transmitter) for which the channel impulse response
-    shall be computed. It can be accessed through the antenna array's property
-    :attr:`~sionna.rt.AntennaArray.positions`. Using a plane-wave assumption, the resulting phase shift
-    for this antenna can be computed as
+    A "synthetic" array is simulated by introducing additional phase shifts, which are dependent on the antenna's position
+    relative to the transmitter and the AoDs. Let :math:`\mathbf{d}_{\text{T},k}\in\mathbb{R}^3` represent the relative
+    position of the :math:`k^\text{th}` antenna (relative to the transmitter's position) for which the channel impulse
+    response is calculated. This can be accessed via the antenna array's property
+    :attr:`~sionna.rt.AntennaArray.positions`. Assuming a plane-wave model, the phase shift for this antenna is computed as:
 
     .. math::
 
         p_{\text{T},n,k} = \frac{2\pi}{\lambda}\hat{\mathbf{r}}(\theta_{\text{T},n}, \varphi_{\text{T},n})^\mathsf{T} \mathbf{d}_{\text{T},k}.
 
-    The expression for the path coefficient of the :math:`k\text{th}` antenna is then
+    The path coefficient for the :math:`k\text{th}` antenna is then expressed as:
 
     .. math::
 
         h_{n,k} =  a_n e^{j p_{\text{T}, n,k}}.
 
-    These coefficients form the complex-valued channel vector :math:`\mathbf{h}_n`
-    of size :math:`\texttt{num_tx_ant}`.
+    These coefficients form the complex-valued channel vector :math:`\mathbf{h}_n` with a size of :math:`\texttt{num_tx_ant}`.
 
-    Finally, the coefficient of the equivalent SISO channel is
+    Finally, the coefficient for the equivalent SISO channel is given by:
 
     .. math::
         h_n =  \mathbf{h}_n^{\textsf{H}} \mathbf{p}
 
-    where :math:`\mathbf{p}` is the precoding vector ``precoding_vec``.
+    where :math:`\mathbf{p}` denotes the precoding vector ``precoding_vec``.
 
     Note
     -----
@@ -163,7 +151,7 @@ class RadioMapSolver:
 
     Example
     -------
-    .. code-block:: Python
+    .. code-block:: python
 
         import sionna
         from sionna.rt import load_scene, PlanarArray, Transmitter, RadioMapSolver
@@ -230,6 +218,7 @@ class RadioMapSolver:
         orientation : mi.Point3f | None = None,
         size : mi.Point2f | None = None,
         cell_size : mi.Point2f = mi.Point2f(10, 10),
+        measurement_surface : mi.Shape | SceneObject | None = None,
         precoding_vec : Tuple[mi.TensorXf, mi.TensorXf] | None = None,
         samples_per_tx : int = 1000000,
         max_depth : int = 3,
@@ -241,32 +230,43 @@ class RadioMapSolver:
         rr_depth : int = -1,
         rr_prob : float = 0.95,
         stop_threshold : float | None = None
-        ) -> RadioMap:
+    ) -> RadioMap:
         # pylint: disable=line-too-long
         r"""
         Executes the solver
 
         :param scene: Scene for which to compute the radio map
 
-        :param center: Center of the radio map :math:`(x,y,z)` [m] as
-            three-dimensional vector. If set to `None`, the radio map is
-            centered on the center of the scene, except for the elevation
-            :math:`z` that is set to 1.5m. Otherwise, ``orientation`` and
-            ``size`` must be provided.
+        :param center: Center of the radio map measurement plane
+            :math:`(x,y,z)` [m] as a three-dimensional vector.
+            Ignored if ``measurement_surface`` is provided.
+            If set to `None`, the radio map is centered on the center of the
+            scene, except for the elevation :math:`z` that is set to 1.5m.
+            Otherwise, ``orientation`` and ``size`` must be provided.
 
-        :param orientation: Orientation of the radio map
+        :param orientation: Orientation of the radio map measurement plane
             :math:`(\alpha, \beta, \gamma)` specified through three angles
             corresponding to a 3D rotation as defined in :eq:`rotation`.
+            Ignored if ``measurement_surface`` is provided.
             An orientation of :math:`(0,0,0)` or `None` corresponds to a
             radio map that is parallel to the XY plane.
             If not set to `None`, then ``center`` and ``size`` must be
             provided.
 
-        :param size:  Size of the radio map [m]. If set to `None`, then the
-            size of the radio map is set such that it covers the entire scene.
+        :param size:  Size of the radio map measurement plane [m].
+            Ignored if ``measurement_surface`` is provided.
+            If set to `None`, then the size of the radio map is set such that
+            it covers the entire scene.
             Otherwise, ``center`` and ``orientation`` must be provided.
 
-        :param cell_size: Size of a cell of the radio map [m]
+        :param cell_size: Size of a cell of the radio map measurement plane [m].
+            Ignored if ``measurement_surface`` is provided.
+
+        :param measurement_surface: Measurement surface. If set, the
+            radio map is computed for this surface, where every triangle in the
+            mesh is a cell in the radio map.
+            If set to `None`, then the radio map is computed for a measurement
+            grid defined by ``center``, ``orientation``, ``size``, and ``cell_size``.
 
         :param precoding_vec: Real and imaginary components of the
             complex-valued precoding vector.
@@ -279,7 +279,7 @@ class RadioMapSolver:
 
         :param los: Enable line-of-sight paths
 
-        :param specular_reflection: Enable specularl reflections
+        :param specular_reflection: Enable specular reflections
 
         :param diffuse_reflection: Enable diffuse reflectios
 
@@ -291,6 +291,7 @@ class RadioMapSolver:
 
         :param rr_prob: Maximum probability with which to keep a path when
             Russian roulette is enabled
+
         :param stop_threshold: Gain threshold [dB] below which a path is
             deactivated
 
@@ -299,35 +300,6 @@ class RadioMapSolver:
 
         # Check that the scene is all set for simulations
         scene.all_set(radio_map=True)
-
-        # Check the properties of the rectangle defining the radio map
-        if ((center is None) and (size is None) and (orientation is None)):
-            # Default value for center: Center of the scene
-            # Default value for the scale: Just enough to cover all the scene
-            # with axis-aligned edges of the rectangle
-            # [min_x, min_y, min_z]
-            scene_min = scene.mi_scene.bbox().min
-            # In case of empty scene, bbox min is -inf
-            scene_min = dr.select(dr.isinf(scene_min), -1.0, scene_min)
-            # [max_x, max_y, max_z]
-            scene_max = scene.mi_scene.bbox().max
-            # In case of empty scene, bbox min is inf
-            scene_max = dr.select(dr.isinf(scene_max), 1.0, scene_max)
-            # Center and size
-            center = 0.5 * (scene_min + scene_max)
-            center.z = 1.5
-            size = scene_max - scene_min
-            size = mi.Point2f(size.x, size.y)
-            # Set the orientation to default value
-            orientation = dr.zeros(mi.Point3f, 1)
-        elif ((center is None) or (size is None) or (orientation is None)):
-            raise ValueError("If one of `cm_center`, `cm_orientation`,"\
-                             " or `cm_size` is not None, then all of them"\
-                             " must not be None")
-        else:
-            center = mi.Point3f(center)
-            orientation = mi.Point3f(orientation)
-            size = mi.Point2f(size)
 
         # Check and initialize the precoding vector
         num_tx = len(scene.transmitters)
@@ -361,15 +333,15 @@ class RadioMapSolver:
 
         # Transmitter configurations
         # Generates sources positions and orientations
-        tx_positions, tx_orientations, rel_ant_positions_tx, _ =\
-                                                    scene.sources(True, False)
+        tx_positions, tx_orientations, rel_ant_positions_tx, _ = \
+            scene.sources(True, False)
         dr.make_opaque(tx_positions, tx_orientations)
 
         # Trace paths and compute channel impulse responses
         tx_antenna_patterns = scene.tx_array.antenna_pattern.patterns
 
         num_tx = dr.shape(tx_positions)[1]
-        num_samples = samples_per_tx*num_tx
+        num_samples = samples_per_tx * num_tx
 
         # If the Russian roulette threshold depth is set to -1, disable Russian
         # roulette by setting the threshold depth to a value higher than
@@ -380,24 +352,36 @@ class RadioMapSolver:
         # If a threshold for the path gain is set below which paths are
         # deactivated, then convert it to linear scale
         if stop_threshold is not None:
-            stop_threshold = dr.power(10., stop_threshold/10.)
+            stop_threshold = dr.power(10., stop_threshold / 10.)
 
         # Set the seed of the sampler
         self._sampler.seed(seed, num_samples)
 
-        # Allocate the pathloss map
-        radio_map = RadioMap(scene, center, orientation, size, cell_size)
+        # Build Radio Map instance
+        # If a measurement surface is provided, then it is a mesh radio map.
+        # Moreover, in this case, the Mitsuba scene is modified by adding the
+        # measurement surface to the scene.
+        if measurement_surface is not None:
+            if isinstance(measurement_surface, SceneObject):
+                measurement_surface = measurement_surface.mi_mesh
+            modified_scene = extend_scene_with_mesh(scene.mi_scene, measurement_surface)
+            radio_map = MeshRadioMap(scene, measurement_surface)
+        else:
+            modified_scene = scene.mi_scene
+            radio_map = PlanarRadioMap(scene, cell_size, center, orientation, size)
 
         # Computes the pathloss map
         # `radio_map` is updated in-place
         with dr.scoped_set_flag(dr.JitFlag.OptimizeLoops, False):
-            self._shoot_and_bounce(scene, radio_map, self._sampler,
-                                tx_positions, tx_orientations, tx_antenna_patterns,
-                                precoding_vec, rel_ant_positions_tx,
-                                samples_per_tx, max_depth,
-                                los, specular_reflection, diffuse_reflection,
-                                refraction, rr_depth, rr_prob,
-                                stop_threshold)
+            with scene.use_mi_scene(modified_scene):
+                self._shoot_and_bounce(scene, radio_map, self._sampler,
+                                       tx_positions, tx_orientations,
+                                       tx_antenna_patterns,
+                                       precoding_vec, rel_ant_positions_tx,
+                                       samples_per_tx, max_depth,
+                                       los, specular_reflection, diffuse_reflection,
+                                       refraction, rr_depth, rr_prob,
+                                       stop_threshold)
 
         return radio_map
 
@@ -505,44 +489,71 @@ class RadioMapSolver:
             # Test intersection with the scene
             si_scene = scene.mi_scene.ray_intersect(ray, active=active)
 
-            # Test intersection with the measurement plane
-            si_mp = radio_map.measurement_plane.ray_intersect(ray,
-                                                              active=active)
+            # Each interaction processes either an interaction with the scene
+            # or an interaction with the measurement plane.
+            # `mp_int` is set to `True` if the interaction is with the measurement
+            # plane.
+            # `scene_int` is set to `True` if the interaction is with the scene.
+            # If the radio map is planar, then test interaction with the measurement
+            # plane. Otherwise, the measurement surface is assumed to be part of
+            # the scene and we only need to check that it has hit the measurement surface.
+            si_mp = None
+            if isinstance(radio_map, PlanarRadioMap):
+                si_mp = radio_map.measurement_surface.ray_intersect(ray,
+                                                                active=active)
+                # An intersection with the measurement plane is valid only if
+                # (i) it was not obstructed by the scene, and (ii) the intersection
+                # is valid.
+                mp_int = active & (si_mp.t < si_scene.t) & si_mp.is_valid()
+                # Ignore interaction with measurement plane if LoS is disabled
+                mp_int &= ((depth > 0) | los)
+            else:
+                # The measurement surface is part of the scene
+                si_mp = si_scene
+                mp_int = si_mp.shape == radio_map.measurement_surface
 
-            # An intersection with the measurement plane is valid only if
-            # (i) it was not obstructed by the scene, and (ii) the intersection
-            # is valid.
-            val_mp_int = active & (si_mp.t < si_scene.t) & si_mp.is_valid()
-            # Disable LoS if requested
-            val_mp_int &= (depth > 0) | los
-            # Update the maps
+            # Update the radio map
+            # The radio map is not updated if LoS is disabled and it is a
+            # LoS interaction with the measurement surface
+            # Note that we need to redo the LoS test to handle the case where
+            # the measurement surface is part of the scene
+            update_radio_map = mp_int & ((depth > 0) | los)
             radio_map.add(e_fields, solid_angle, array_w, si_mp, ray.d,
-                          tx_indices, val_mp_int)
+                          tx_indices, update_radio_map)
 
             # Update the active state of rays
-            # Active rays are those that hit the scene
+            # Active if has hit the scene (which includes the measurement surface
+            # if it is part of the scene)
             active &= si_scene.is_valid()
+
+            # It is an interaction with the scene if (i) the ray has hit the scene
+            # and (ii) it has not hit the measurement plane
+            scene_int = active & ~mp_int
 
             # Sample the BSDF
             # Sample random numbers to sample the BSDF
             sample1 = sampler.next_1d()
             sample2 = sampler.next_2d()
-            s, e_fields = self._sample_radio_material(si_scene, ray.d, e_fields,
+            s, e_fields = self._sample_radio_material(
+                si_scene, ray.d, e_fields,
                 solid_angle, sample1, sample2, specular_reflection,
-                diffuse_reflection, refraction, active)
-            interaction_type = dr.select(active, s.sampled_component,
+                diffuse_reflection, refraction, scene_int
+            )
+            interaction_type = dr.select(scene_int, s.sampled_component,
                                          InteractionType.NONE)
-            diffuse = active & (interaction_type == InteractionType.DIFFUSE)
+            diffuse = scene_int & (interaction_type == InteractionType.DIFFUSE)
             # Update the solid angle
             # If a diffuse reflection is sampled, then it is set to 2PI.
             # Otherwise it is left unchanged
             solid_angle = dr.select(diffuse, dr.two_pi, solid_angle)
 
             # Spawn rays for next iteration
-            ray = si_scene.spawn_ray(d=s.wo)
-            depth += 1
+            ray_scene_int = si_scene.spawn_ray(d=s.wo)
+            ray_mp_int = si_mp.spawn_ray(d=ray.d)
+            ray = dr.select(scene_int, ray_scene_int, ray_mp_int)
+            depth = dr.select(scene_int, depth + 1, depth)
             active &= (depth <= max_depth)
-            active &= (interaction_type != InteractionType.NONE)
+            active &= mp_int | (interaction_type != InteractionType.NONE)
 
             ## Russian roulette and gain threshold deactivation
 
@@ -553,14 +564,14 @@ class RadioMapSolver:
             # Update the ray tube length
             if stop_threshold is not None:
                 ray_tube_length = dr.select(diffuse, 0.0, ray_tube_length)
-                ray_tube_length += si_scene.t
+                ray_tube_length += dr.select(scene_int, si_scene.t, si_mp.t)
 
             # Is the depth threshold to activate Russian roulette reached?
             rr_inactive = depth < rr_depth
             # User specify a maximum probability of continuing tracing
             rr_continue_prob = dr.minimum(gain, rr_prob)
             # Randomly stop tracing of rays
-            rr_continue = sampler.next_1d() < rr_continue_prob
+            rr_continue = scene_int & (sampler.next_1d() < rr_continue_prob)
             active &= (rr_inactive | rr_continue)
 
             # Scale the remaining rays accordingly to ensure an unbiased result
@@ -572,7 +583,7 @@ class RadioMapSolver:
             if stop_threshold is not None:
                 gain_pl = gain*dr.square(scene.wavelength
                                          * dr.rcp(4. * dr.pi * ray_tube_length))
-                th_continue = gain_pl > stop_threshold
+                th_continue = scene_int & (gain_pl > stop_threshold)
                 active &= th_continue
 
         # Finalizes the computation of the radio maps
@@ -585,7 +596,7 @@ class RadioMapSolver:
         k_tx : mi.Vector3f,
         rel_ant_positions_tx : mi.Point3f,
         precoding_vec : Tuple[mi.TensorXf, mi.TensorXf],
-        ) -> List[mi.Float]:
+    ) -> List[mi.Float]:
         r"""
         Computes the weighting to apply to the electric field to synthetically
         model the transmitter array
@@ -774,6 +785,8 @@ class RadioMapSolver:
                                                  active)
             jones_mat = spectrum_to_matrix_4f(jones_mat)
             # Update the field by applying the Jones matrix
-            e_fields[i] = mi.Vector4f(jones_mat@e_field)
+            e_fields[i] = dr.select(active,
+                                    mi.Vector4f(jones_mat@e_field),
+                                    e_fields[i])
 
         return sample, e_fields

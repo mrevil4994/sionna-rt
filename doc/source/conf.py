@@ -23,7 +23,7 @@ copyright = "2021-2025 NVIDIA CORPORATION"
 # Read version number from sionna.__init__
 from importlib.machinery import SourceFileLoader
 release = SourceFileLoader("version",
-                           "../../src/sionna/__init__.py").load_module().__version__
+                           "../../src/sionna/rt/__init__.py").load_module().__version__
 
 
 # -- General configuration ---------------------------------------------------

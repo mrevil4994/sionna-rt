@@ -181,9 +181,8 @@ class RadioMaterial(RadioMaterialBase):
     @relative_permittivity.setter
     def relative_permittivity(self, eta_r):
         if eta_r < 1.0:
-            msg = "Real part of the relative permittivity must greater "\
-                "or equal to 1"
-            raise ValueError(msg)
+            raise ValueError("Real part of the relative permittivity must be"
+                             " greater or equal to 1")
         self._eta_r = mi.Float(eta_r)
 
     @property
@@ -197,8 +196,7 @@ class RadioMaterial(RadioMaterialBase):
     @conductivity.setter
     def conductivity(self, sigma):
         if sigma < 0.0:
-            msg = "The conductivity must be greater or equal to 0"
-            raise ValueError(msg)
+            raise ValueError("The conductivity must be greater or equal to 0")
         self._sigma = mi.Float(sigma)
 
     @property
@@ -227,8 +225,7 @@ class RadioMaterial(RadioMaterialBase):
     @scattering_coefficient.setter
     def scattering_coefficient(self, s):
         if s < 0.0 or s > 1.0:
-            msg = "Scattering coefficient must be in range (0,1)"
-            raise ValueError(msg)
+            raise ValueError("Scattering coefficient must be in range (0,1)")
         self._s = mi.Float(s)
 
     @property
@@ -243,8 +240,7 @@ class RadioMaterial(RadioMaterialBase):
     @xpd_coefficient.setter
     def xpd_coefficient(self, kx):
         if kx < 0.0 or kx > 1.0:
-            msg = "XPD coefficient must be in the range (0,1)"
-            raise ValueError(msg)
+            raise ValueError("XPD coefficient must be in the range (0,1)")
         self._kx = mi.Float(kx)
         self._build_xpd_jones_mat()
 
@@ -313,7 +309,7 @@ class RadioMaterial(RadioMaterialBase):
 
         - ``ctx.component`` is a binary mask that specifies the types of interaction enabled. Booleans can be obtained from this mask as follows:
 
-        .. code-block:: Python
+        .. code-block:: python
 
             specular_reflection_enabled = (ctx.component & InteractionType.SPECULAR) > 0
             diffuse_reflection_enabled = (ctx.component & InteractionType.DIFFUSE) > 0

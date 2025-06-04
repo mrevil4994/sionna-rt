@@ -157,22 +157,21 @@ def cpx_convert(
         try:
             import tensorflow as tf # pylint: disable=import-outside-toplevel
         except ImportError as e:
-            msg = "Please install TensorFlow to use this feature."
-            raise ImportError(msg) from e
+            raise ImportError("Please install TensorFlow to use this feature.")\
+                  from e
         return tf.complex(x[0].tf(), x[1].tf())
     elif out_type == "torch":
         try:
             import torch # pylint: disable=import-outside-toplevel
         except ImportError as e:
-            msg = "Please install PyTorch to use this feature."
-            raise ImportError(msg) from e
+            raise ImportError("Please install PyTorch to use this feature.") \
+                  from e
         return torch.complex(x[0].torch(), x[1].torch())
     elif out_type == "jax":
         try:
             from jax import lax # pylint: disable=import-outside-toplevel
         except ImportError as e:
-            msg = "Please install Jax to use this feature."
-            raise ImportError(msg) from e
+            raise ImportError("Please install Jax to use this feature.") from e
         return lax.complex(x[0].jax(), x[1].jax())
     else:
-        raise ValueError(f"Usupported target: {out_type}")
+        raise ValueError(f"Unsupported target: {out_type}")

@@ -53,7 +53,7 @@ def theta_phi_from_unit_vec(v : mi.Vector3f) -> Tuple[mi.Float, mi.Float]:
 
     # Clip z for numerical stability
     z = dr.clip(v.z, -1, 1)
-    theta = dr.acos(z)
+    theta = dr.safe_acos(z)
     phi = dr.atan2(v.y, v.x)
     return theta, phi
 

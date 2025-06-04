@@ -721,8 +721,6 @@ class Paths:
 
         frequencies = mi.Float(frequencies)
 
-        frequencies = mi.Float(frequencies)
-
         # Get complex baseband equivalent CIR
         a, tau_ = self.cir(sampling_frequency=sampling_frequency,
                            num_time_steps=num_time_steps,
@@ -741,7 +739,7 @@ class Paths:
 
         # Add dummy dimensions to account for synthetic arrays
         if self.synthetic_array:
-            num_rx, num_tx, num_paths = self.tau.shape
+            num_rx, num_tx, num_paths = tau_.shape
             tau_ = dr.reshape(mi.TensorXf, tau_,
                              [num_rx, 1, num_tx, 1, num_paths])
 
